@@ -1,7 +1,7 @@
 using System.Text.Json;
-using SoulSync.Models;
+using SoulBuddy.Models;
 
-namespace SoulSync.Services;
+namespace SoulBuddy.Services;
 
 public sealed class PartyReader
 {

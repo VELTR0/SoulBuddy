@@ -1,7 +1,7 @@
-using SoulSync.Data;
-using SoulSync.Models;
+using SoulBuddy.Data;
+using SoulBuddy.Models;
 
-namespace SoulSync.Services;
+namespace SoulBuddy.Services;
 
 public sealed class SyncService
 {
@@ -109,8 +109,15 @@ public sealed class SyncService
 
                 // Damit dieselbe Meldung nicht jede Sekunde erscheint.
                 await _knownPokemon.AddAsync(
-                    uniqueId,
-                    cancellationToken);
+                uniqueId,
+                new KnownPokemonEntry
+                {
+                    Species = pokemon.SpeciesName,
+                    Nickname = pokemon.Nickname,
+                    Location = locationName,
+                    LocationId = pokemon.LocationMet
+                },
+                cancellationToken);
 
                 continue;
             }
@@ -145,8 +152,15 @@ public sealed class SyncService
             }
 
             await _knownPokemon.AddAsync(
-                uniqueId,
-                cancellationToken);
+            uniqueId,
+            new KnownPokemonEntry
+            {
+                Species = pokemon.SpeciesName,
+                Nickname = pokemon.Nickname,
+                Location = locationName,
+                LocationId = pokemon.LocationMet
+            },
+            cancellationToken);
         }
     }
 

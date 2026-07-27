@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace SoulSync.Models;
+namespace SoulBuddy.Models;
 
 public sealed class BatchLoadResponse
 {

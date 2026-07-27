@@ -1,11 +1,20 @@
 using System.Text.Json;
 
-namespace SoulSync.Data;
+namespace SoulBuddy.Data;
+
+public sealed class KnownPokemonEntry
+{
+    public string Species { get; set; } = string.Empty;
+    public string? Nickname { get; set; }
+    public string Location { get; set; } = string.Empty;
+    public int LocationId { get; set; }
+}
 
 public sealed class KnownPokemonStore
 {
     private readonly string _path;
-    private readonly HashSet<string> _knownIds = [];
+
+    private readonly Dictionary<string, KnownPokemonEntry> _knownPokemon = [];
 
     public KnownPokemonStore(string path)
     {
@@ -21,43 +30,55 @@ public sealed class KnownPokemonStore
 
         await using var stream = File.OpenRead(_path);
 
-        var ids = await JsonSerializer.DeserializeAsync<HashSet<string>>(
-            stream,
-            cancellationToken: cancellationToken);
+        var entries =
+            await JsonSerializer.DeserializeAsync<
+                Dictionary<string, KnownPokemonEntry>>(
+                stream,
+                cancellationToken: cancellationToken);
 
-        if (ids is null)
+        if (entries is null)
         {
             return;
         }
 
-        foreach (var id in ids)
+        foreach (var entry in entries)
         {
-            _knownIds.Add(id);
+            _knownPokemon[entry.Key] = entry.Value;
         }
     }
 
-    public bool Contains(string id) => _knownIds.Contains(id);
+    public bool Contains(string id)
+    {
+        return _knownPokemon.ContainsKey(id);
+    }
 
     public async Task AddAsync(
         string id,
+        KnownPokemonEntry entry,
         CancellationToken cancellationToken)
     {
-        if (!_knownIds.Add(id))
+        if (_knownPokemon.ContainsKey(id))
         {
             return;
         }
+
+        _knownPokemon[id] = entry;
 
         await SaveAsync(cancellationToken);
     }
 
-    private async Task SaveAsync(CancellationToken cancellationToken)
+    private async Task SaveAsync(
+        CancellationToken cancellationToken)
     {
         await using var stream = File.Create(_path);
 
         await JsonSerializer.SerializeAsync(
             stream,
-            _knownIds,
-            new JsonSerializerOptions { WriteIndented = true },
+            _knownPokemon,
+            new JsonSerializerOptions
+            {
+                WriteIndented = true
+            },
             cancellationToken);
     }
 }

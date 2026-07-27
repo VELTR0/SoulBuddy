@@ -1,17 +1,15 @@
-namespace SoulSync.Services;
+namespace SoulBuddy.Services;
 
 public sealed class LocationMapper
 {
     private readonly Dictionary<int, string> _locations = new()
     {
-        // Diese Werte müssen wir noch exakt überprüfen.
-        // Trage zunächst nur bestätigte Werte ein.
-        [220] = "Finsterhöhle",
-        [179] = "Route 31",
+        [126] = "Starter",
         [178] = "Route 30",
-
-        // Beispiel:
-        // [177] = "Route 29"
+        [179] = "Route 31",
+        [180] = "Route 32",
+        [204] = "Placeholder 1",
+        [220] = "Finsterhöhle"
     };
 
     public string? GetLocationName(int locationId)

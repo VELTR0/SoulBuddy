@@ -1,7 +1,7 @@
 ﻿using System.Text.Json;
-using SoulSync.Data;
-using SoulSync.Models;
-using SoulSync.Services;
+using SoulBuddy.Data;
+using SoulBuddy.Models;
+using SoulBuddy.Services;
 
 var baseDirectory = AppContext.BaseDirectory;
 var configPath = Path.Combine(baseDirectory, "appsettings.json");

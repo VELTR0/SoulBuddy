@@ -1,4 +1,4 @@
-namespace SoulSync.Models;
+namespace SoulBuddy.Models;
 
 public sealed class AppConfig
 {
