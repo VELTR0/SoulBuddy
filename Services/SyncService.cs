@@ -1,28 +1,29 @@
 using SoulBuddy.Data;
 using SoulBuddy.Models;
+using SoulBuddy.Sources;
 
 namespace SoulBuddy.Services;
 
 public sealed class SyncService
 {
     private readonly AppConfig _config;
-    private readonly PartyReader _partyReader;
+    private readonly IPartySource _partySource;
     private readonly SoullockeClient _soullockeClient;
     private readonly KnownPokemonStore _knownPokemon;
     private readonly LocationMapper _locationMapper;
 
     public SyncService(
-        AppConfig config,
-        PartyReader partyReader,
-        SoullockeClient soullockeClient,
+        IPartySource partySource,
         KnownPokemonStore knownPokemon,
-        LocationMapper locationMapper)
+        SoullockeClient soullockeClient,
+        LocationMapper locationMapper,
+        AppConfig config)
     {
-        _config = config;
-        _partyReader = partyReader;
-        _soullockeClient = soullockeClient;
+        _partySource = partySource;
         _knownPokemon = knownPokemon;
+        _soullockeClient = soullockeClient;
         _locationMapper = locationMapper;
+        _config = config;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -62,9 +63,7 @@ public sealed class SyncService
     private async Task SynchronizeOnceAsync(
         CancellationToken cancellationToken)
     {
-        var party = await _partyReader.ReadAsync(
-            _config.PartyJsonPath,
-            cancellationToken);
+        var party = await _partySource.ReadPartyAsync(cancellationToken);
 
         foreach (var slot in party)
         {

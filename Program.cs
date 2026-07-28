@@ -2,6 +2,7 @@
 using SoulBuddy.Data;
 using SoulBuddy.Models;
 using SoulBuddy.Services;
+using SoulBuddy.Sources;
 
 var baseDirectory = AppContext.BaseDirectory;
 var configPath = Path.Combine(baseDirectory, "appsettings.json");
@@ -34,18 +35,19 @@ using var httpClient = new HttpClient
     Timeout = TimeSpan.FromSeconds(15)
 };
 
-var partyReader = new PartyReader();
+IPartySource partySource =
+    new JsonPartySource(config.PartyJsonPath);
 var soullockeClient = new SoullockeClient(httpClient, config);
 var knownPokemonStore = new KnownPokemonStore(
     Path.Combine(baseDirectory, "known-pokemon.json"));
 var locationMapper = new LocationMapper();
 
 var syncService = new SyncService(
-    config,
-    partyReader,
-    soullockeClient,
+    partySource,
     knownPokemonStore,
-    locationMapper);
+    soullockeClient,
+    locationMapper,
+    config);
 
 using var cancellationSource = new CancellationTokenSource();
 
