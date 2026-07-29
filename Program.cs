@@ -76,6 +76,10 @@ var partyJsonPath = Path.IsPathRooted(config.PartyJsonPath)
             baseDirectory,
             config.PartyJsonPath));
 
+var databasePath = Path.Combine(
+    baseDirectory,
+    "soulbuddy.db");
+
 using var httpClient = new HttpClient
 {
     Timeout = TimeSpan.FromSeconds(15)
@@ -85,13 +89,12 @@ IPartySource partySource =
     new JsonPartySource(partyJsonPath);
 
 var soullockeClient =
-    new SoullockeClient(httpClient, config);
+    new SoullockeClient(
+        httpClient,
+        config);
 
 var knownPokemonStore =
-    new KnownPokemonStore(
-        Path.Combine(
-            baseDirectory,
-            "known-pokemon.json"));
+    new KnownPokemonStore(databasePath);
 
 var locationMapper =
     new LocationMapper();

@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("SoulBuddy")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+eb63d413faca191fffcad12334d162f805fd104e")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f89821aa1e9f01f060d265da947a6b20d87f9fec")]
 [assembly: System.Reflection.AssemblyProductAttribute("SoulBuddy")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SoulBuddy")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

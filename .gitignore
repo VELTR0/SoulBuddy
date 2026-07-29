@@ -1,4 +1,8 @@
 party.json
 known-pokemon.json
+soulbuddy.db
+soulbuddy.db-shm
+soulbuddy.db-wal
+appsettings.local.json
 bin/
 obj/
