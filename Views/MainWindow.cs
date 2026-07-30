@@ -86,11 +86,11 @@ public sealed class MainWindow : Window
         };
 
         var status = Text("", 14, FontWeight.Medium, "#CBD5E1");
-        status.SetBinding(TextBlock.TextProperty, new Binding("StatusText"));
+        status.Bind(TextBlock.TextProperty, new Binding("StatusText"));
         footerGrid.Children.Add(status);
 
         var connection = Text("", 14, FontWeight.SemiBold, "#7DD3FC");
-        connection.SetBinding(TextBlock.TextProperty, new Binding("ConnectionText"));
+        connection.Bind(TextBlock.TextProperty, new Binding("ConnectionText"));
         Grid.SetColumn(connection, 1);
         footerGrid.Children.Add(connection);
 
@@ -171,7 +171,7 @@ public sealed class MainWindow : Window
             "#F8FAFC"));
 
         var count = Text("", 13, FontWeight.Medium, "#93C5FD");
-        count.SetBinding(TextBlock.TextProperty, new Binding(countBinding));
+        count.Bind(TextBlock.TextProperty, new Binding(countBinding));
         Grid.SetColumn(count, 1);
         header.Children.Add(count);
         grid.Children.Add(header);
@@ -212,13 +212,13 @@ public sealed class MainWindow : Window
         var detailPanel = new StackPanel { Spacing = 16 };
 
         var title = Text("", 28, FontWeight.Bold, "#F8FAFC");
-        title.SetBinding(TextBlock.TextProperty, new Binding("DetailsTitle"));
+        title.Bind(TextBlock.TextProperty, new Binding("DetailsTitle"));
         detailPanel.Children.Add(title);
 
         var details = Text("", 15, FontWeight.Normal, "#CBD5E1");
         details.TextWrapping = TextWrapping.Wrap;
         details.LineHeight = 23;
-        details.SetBinding(TextBlock.TextProperty, new Binding("DetailsText"));
+        details.Bind(TextBlock.TextProperty, new Binding("DetailsText"));
         detailPanel.Children.Add(details);
 
         var detailScroll = new ScrollViewer
