@@ -28,26 +28,24 @@ public sealed class JsonLineCollectorEventSource
         CancellationToken cancellationToken)
     {
         Console.WriteLine(
-            $"Collector-Ereignisse: {Path.GetFileName(_eventFilePath)}");
+            $"Collector-Ereignisse: {_eventFilePath}");
 
         Console.WriteLine(
             "Warte auf Nachrichten vom Emulator.");
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            if (!File.Exists(_eventFilePath))
-            {
-                await Task.Delay(
-                    500,
-                    cancellationToken);
-
-                continue;
-            }
-
             try
             {
+                if (!File.Exists(_eventFilePath))
+                {
+                    await Task.Delay(500, cancellationToken);
+                    continue;
+                }
+
                 InitializeReadPosition();
-                await ReadEventsAsync(cancellationToken);
+                await ReadAvailableEventsAsync(cancellationToken);
+                await Task.Delay(250, cancellationToken);
             }
             catch (OperationCanceledException)
                 when (cancellationToken.IsCancellationRequested)
@@ -56,9 +54,7 @@ public sealed class JsonLineCollectorEventSource
             }
             catch (IOException)
             {
-                await Task.Delay(
-                    500,
-                    cancellationToken);
+                await Task.Delay(500, cancellationToken);
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -66,9 +62,7 @@ public sealed class JsonLineCollectorEventSource
                     $"Zugriff auf die Event-Datei nicht möglich: " +
                     $"{ex.Message}");
 
-                await Task.Delay(
-                    1000,
-                    cancellationToken);
+                await Task.Delay(1000, cancellationToken);
             }
         }
     }
@@ -84,7 +78,7 @@ public sealed class JsonLineCollectorEventSource
         _readPositionInitialized = true;
     }
 
-    private async Task ReadEventsAsync(
+    private async Task ReadAvailableEventsAsync(
         CancellationToken cancellationToken)
     {
         await using var stream = new FileStream(
@@ -104,27 +98,26 @@ public sealed class JsonLineCollectorEventSource
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            var line = await reader.ReadLineAsync(
-                cancellationToken);
+            var lineStartPosition = stream.Position;
+            var line = await reader.ReadLineAsync(cancellationToken);
 
             if (line is null)
             {
                 _readPosition = stream.Position;
-
-                await Task.Delay(
-                    250,
-                    cancellationToken);
-
-                if (stream.Length < _readPosition)
-                {
-                    return;
-                }
-
-                continue;
+                break;
             }
 
             _readPosition = stream.Position;
-            await ProcessLineAsync(line, cancellationToken);
+
+            try
+            {
+                await ProcessLineAsync(line, cancellationToken);
+            }
+            catch
+            {
+                _readPosition = lineStartPosition;
+                throw;
+            }
         }
     }
 
