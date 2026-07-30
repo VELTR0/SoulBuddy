@@ -1,17 +1,30 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using SoulBuddy.Data;
 using SoulBuddy.Models;
 using SoulBuddy.Services;
 using SoulBuddy.Sources;
 
-var baseDirectory = AppContext.BaseDirectory;
+var workingDirectory = Directory.GetCurrentDirectory();
+var executableDirectory = AppContext.BaseDirectory;
+
+var workingConfigPath = Path.Combine(
+    workingDirectory,
+    "appsettings.json");
+
+var executableConfigPath = Path.Combine(
+    executableDirectory,
+    "appsettings.json");
+
+var configDirectory = File.Exists(workingConfigPath)
+    ? workingDirectory
+    : executableDirectory;
 
 var defaultConfigPath = Path.Combine(
-    baseDirectory,
+    configDirectory,
     "appsettings.json");
 
 var localConfigPath = Path.Combine(
-    baseDirectory,
+    configDirectory,
     "appsettings.local.json");
 
 if (!File.Exists(defaultConfigPath))
@@ -75,7 +88,7 @@ var partyJsonPath = Path.IsPathRooted(config.PartyJsonPath)
     ? config.PartyJsonPath
     : Path.GetFullPath(
         Path.Combine(
-            baseDirectory,
+            configDirectory,
             config.PartyJsonPath));
 
 var runtimeDirectory =
@@ -96,7 +109,7 @@ var eventFilePath = Path.Combine(
     "emulator-events.jsonl");
 
 var databasePath = Path.Combine(
-    baseDirectory,
+    configDirectory,
     "soulbuddy.db");
 
 using var httpClient = new HttpClient
