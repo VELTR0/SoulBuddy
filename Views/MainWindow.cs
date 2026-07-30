@@ -1,95 +1,38 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Threading;
-using SoulBuddy.Data;
-using SoulBuddy.Models;
-using SoulBuddy.Services;
+using SoulBuddy.ViewModels;
 
 namespace SoulBuddy.Views;
 
 public sealed class MainWindow : Window
 {
-    private readonly TextBlock _statusText;
-    private readonly TextBlock _connectionText;
-    private readonly TextBlock _partyCountText;
-    private readonly TextBlock _pokemonCountText;
+    private readonly MainWindowViewModel _viewModel;
     private readonly StackPanel _partyPanel;
     private readonly StackPanel _pokemonPanel;
-    private readonly TextBlock _detailsTitle;
-    private readonly TextBlock _detailsText;
-    private readonly DispatcherTimer _refreshTimer;
-
-    private SoulBuddyRuntime? _runtime;
-    private bool _refreshInProgress;
 
     public MainWindow()
     {
         Title = "SoulBuddy";
-        Width = 1280;
-        Height = 780;
+        Width = 1360;
+        Height = 820;
         MinWidth = 980;
-        MinHeight = 620;
-        Background = new SolidColorBrush(Color.Parse("#0F172A"));
+        MinHeight = 640;
+        Background = Brush("#0B1220");
 
-        _statusText = CreateText(
-            "SoulBuddy wird gestartet …",
-            14,
-            FontWeight.Medium,
-            "#CBD5E1");
+        _viewModel = new MainWindowViewModel();
+        DataContext = _viewModel;
 
-        _connectionText = CreateText(
-            "Offline",
-            14,
-            FontWeight.SemiBold,
-            "#94A3B8");
+        _partyPanel = new StackPanel { Spacing = 12 };
+        _pokemonPanel = new StackPanel { Spacing = 10 };
 
-        _partyCountText = CreateText(
-            "0 / 6",
-            13,
-            FontWeight.Medium,
-            "#94A3B8");
-
-        _pokemonCountText = CreateText(
-            "0 Pokémon",
-            13,
-            FontWeight.Medium,
-            "#94A3B8");
-
-        _partyPanel = new StackPanel
-        {
-            Spacing = 10
-        };
-
-        _pokemonPanel = new StackPanel
-        {
-            Spacing = 8
-        };
-
-        _detailsTitle = CreateText(
-            "Kein Pokémon ausgewählt",
-            24,
-            FontWeight.Bold,
-            "#F8FAFC");
-
-        _detailsText = CreateText(
-            "Wähle links oder in der Mitte ein Pokémon aus.",
-            14,
-            FontWeight.Normal,
-            "#CBD5E1");
-
-        _detailsText.TextWrapping = TextWrapping.Wrap;
+        _viewModel.Party.CollectionChanged += (_, _) => RenderParty();
+        _viewModel.StoredPokemon.CollectionChanged += (_, _) => RenderStoredPokemon();
 
         Content = BuildLayout();
-
-        _refreshTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(1)
-        };
-        _refreshTimer.Tick += OnRefreshTimerTick;
-
         Opened += OnOpened;
         Closing += OnClosing;
     }
@@ -105,30 +48,25 @@ public sealed class MainWindow : Window
 
         var contentGrid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("320,*,360"),
-            Margin = new Thickness(20, 16, 20, 16),
-            ColumnSpacing = 16
+            ColumnDefinitions = new ColumnDefinitions("340,*,380"),
+            Margin = new Thickness(24, 20),
+            ColumnSpacing = 18
         };
-
         Grid.SetRow(contentGrid, 1);
 
-        var partyCard = CreateCard(
-            BuildSection(
-                "Aktuelles Team",
-                _partyCountText,
-                _partyPanel));
+        contentGrid.Children.Add(CreateCard(BuildSection(
+            "Aktuelles Team",
+            "PartyCountText",
+            _partyPanel)));
 
-        var pokemonCard = CreateCard(
-            BuildSection(
-                "Gespeicherte Pokémon",
-                _pokemonCountText,
-                _pokemonPanel));
+        var storedCard = CreateCard(BuildSection(
+            "Gespeicherte Pokémon",
+            "PokemonCountText",
+            _pokemonPanel));
+        Grid.SetColumn(storedCard, 1);
+        contentGrid.Children.Add(storedCard);
 
         var detailsCard = CreateCard(BuildDetailsSection());
-
-        contentGrid.Children.Add(partyCard);
-        Grid.SetColumn(pokemonCard, 1);
-        contentGrid.Children.Add(pokemonCard);
         Grid.SetColumn(detailsCard, 2);
         contentGrid.Children.Add(detailsCard);
 
@@ -136,10 +74,10 @@ public sealed class MainWindow : Window
 
         var footer = new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#111C31")),
-            BorderBrush = new SolidColorBrush(Color.Parse("#24324A")),
+            Background = Brush("#101A2E"),
+            BorderBrush = Brush("#263650"),
             BorderThickness = new Thickness(0, 1, 0, 0),
-            Padding = new Thickness(20, 12)
+            Padding = new Thickness(24, 13)
         };
 
         var footerGrid = new Grid
@@ -147,11 +85,16 @@ public sealed class MainWindow : Window
             ColumnDefinitions = new ColumnDefinitions("*,Auto")
         };
 
-        footerGrid.Children.Add(_statusText);
-        Grid.SetColumn(_connectionText, 1);
-        footerGrid.Children.Add(_connectionText);
-        footer.Child = footerGrid;
+        var status = Text("", 14, FontWeight.Medium, "#CBD5E1");
+        status.SetBinding(TextBlock.TextProperty, new Binding("StatusText"));
+        footerGrid.Children.Add(status);
 
+        var connection = Text("", 14, FontWeight.SemiBold, "#7DD3FC");
+        connection.SetBinding(TextBlock.TextProperty, new Binding("ConnectionText"));
+        Grid.SetColumn(connection, 1);
+        footerGrid.Children.Add(connection);
+
+        footer.Child = footerGrid;
         Grid.SetRow(footer, 2);
         root.Children.Add(footer);
 
@@ -162,10 +105,10 @@ public sealed class MainWindow : Window
     {
         var header = new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#111C31")),
-            BorderBrush = new SolidColorBrush(Color.Parse("#24324A")),
+            Background = Brush("#101A2E"),
+            BorderBrush = Brush("#263650"),
             BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(22, 16)
+            Padding = new Thickness(26, 18)
         };
 
         var grid = new Grid
@@ -173,49 +116,41 @@ public sealed class MainWindow : Window
             ColumnDefinitions = new ColumnDefinitions("*,Auto")
         };
 
-        var titlePanel = new StackPanel
-        {
-            Spacing = 2
-        };
-
-        titlePanel.Children.Add(CreateText(
+        var titlePanel = new StackPanel { Spacing = 3 };
+        titlePanel.Children.Add(Text(
             "SoulBuddy",
-            28,
+            31,
             FontWeight.Bold,
             "#F8FAFC"));
-
-        titlePanel.Children.Add(CreateText(
-            "Lokaler Nuzlocke- und SoulLink-Begleiter",
-            13,
+        titlePanel.Children.Add(Text(
+            "Dein lokaler Nuzlocke- und SoulLink-Begleiter",
+            14,
             FontWeight.Normal,
             "#94A3B8"));
-
         grid.Children.Add(titlePanel);
 
         var badge = new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#172554")),
+            Background = Brush("#172554"),
             CornerRadius = new CornerRadius(18),
-            Padding = new Thickness(14, 8),
-            VerticalAlignment = VerticalAlignment.Center
+            Padding = new Thickness(15, 8),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = Text(
+                "PHASE 1 · MVVM",
+                12,
+                FontWeight.Bold,
+                "#93C5FD")
         };
-
-        badge.Child = CreateText(
-            "DESKTOP PREVIEW",
-            12,
-            FontWeight.Bold,
-            "#93C5FD");
-
         Grid.SetColumn(badge, 1);
         grid.Children.Add(badge);
-        header.Child = grid;
 
+        header.Child = grid;
         return header;
     }
 
     private Control BuildSection(
         string title,
-        TextBlock countText,
+        string countBinding,
         StackPanel contentPanel)
     {
         var grid = new Grid
@@ -226,17 +161,19 @@ public sealed class MainWindow : Window
         var header = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            Margin = new Thickness(0, 0, 0, 14)
+            Margin = new Thickness(0, 0, 0, 16)
         };
 
-        header.Children.Add(CreateText(
+        header.Children.Add(Text(
             title,
-            19,
+            20,
             FontWeight.Bold,
             "#F8FAFC"));
 
-        Grid.SetColumn(countText, 1);
-        header.Children.Add(countText);
+        var count = Text("", 13, FontWeight.Medium, "#93C5FD");
+        count.SetBinding(TextBlock.TextProperty, new Binding(countBinding));
+        Grid.SetColumn(count, 1);
+        header.Children.Add(count);
         grid.Children.Add(header);
 
         var scrollViewer = new ScrollViewer
@@ -244,7 +181,6 @@ public sealed class MainWindow : Window
             Content = contentPanel,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto
         };
-
         Grid.SetRow(scrollViewer, 1);
         grid.Children.Add(scrollViewer);
 
@@ -253,304 +189,227 @@ public sealed class MainWindow : Window
 
     private Control BuildDetailsSection()
     {
-        var panel = new StackPanel
+        var grid = new Grid
         {
-            Spacing = 16
+            RowDefinitions = new RowDefinitions("Auto,Auto,*")
         };
 
-        panel.Children.Add(CreateText(
+        grid.Children.Add(Text(
             "Pokémon-Details",
-            19,
+            20,
             FontWeight.Bold,
             "#F8FAFC"));
 
         var separator = new Border
         {
             Height = 1,
-            Background = new SolidColorBrush(Color.Parse("#334155"))
+            Background = Brush("#334155"),
+            Margin = new Thickness(0, 16, 0, 22)
         };
+        Grid.SetRow(separator, 1);
+        grid.Children.Add(separator);
 
-        panel.Children.Add(separator);
-        panel.Children.Add(_detailsTitle);
-        panel.Children.Add(_detailsText);
+        var detailPanel = new StackPanel { Spacing = 16 };
 
-        return panel;
+        var title = Text("", 28, FontWeight.Bold, "#F8FAFC");
+        title.SetBinding(TextBlock.TextProperty, new Binding("DetailsTitle"));
+        detailPanel.Children.Add(title);
+
+        var details = Text("", 15, FontWeight.Normal, "#CBD5E1");
+        details.TextWrapping = TextWrapping.Wrap;
+        details.LineHeight = 23;
+        details.SetBinding(TextBlock.TextProperty, new Binding("DetailsText"));
+        detailPanel.Children.Add(details);
+
+        var detailScroll = new ScrollViewer
+        {
+            Content = detailPanel,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+        };
+        Grid.SetRow(detailScroll, 2);
+        grid.Children.Add(detailScroll);
+
+        return grid;
     }
 
     private static Border CreateCard(Control content)
     {
         return new Border
         {
-            Background = new SolidColorBrush(Color.Parse("#172033")),
-            BorderBrush = new SolidColorBrush(Color.Parse("#2A3952")),
+            Background = Brush("#151F33"),
+            BorderBrush = Brush("#2B3C58"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(14),
-            Padding = new Thickness(18),
-            Child = content
+            CornerRadius = new CornerRadius(16),
+            Padding = new Thickness(20),
+            Child = content,
+            BoxShadow = new BoxShadows(new BoxShadow
+            {
+                Blur = 18,
+                OffsetY = 4,
+                Color = Color.Parse("#33000000")
+            })
         };
     }
 
-    private static TextBlock CreateText(
-        string text,
-        double fontSize,
-        FontWeight fontWeight,
-        string color)
-    {
-        return new TextBlock
-        {
-            Text = text,
-            FontSize = fontSize,
-            FontWeight = fontWeight,
-            Foreground = new SolidColorBrush(Color.Parse(color))
-        };
-    }
-
-    private async void OnOpened(object? sender, EventArgs eventArgs)
-    {
-        try
-        {
-            _runtime = await SoulBuddyRuntime.CreateAsync();
-            _runtime.Start();
-
-            _connectionText.Text = _runtime.Config.SoullockeEnabled
-                ? "Soullocke aktiviert"
-                : "Lokal / Offline";
-
-            _connectionText.Foreground = new SolidColorBrush(
-                Color.Parse(
-                    _runtime.Config.SoullockeEnabled
-                        ? "#86EFAC"
-                        : "#93C5FD"));
-
-            _statusText.Text =
-                $"Collector aktiv · {_runtime.EventFilePath}";
-
-            await RefreshAsync();
-            _refreshTimer.Start();
-        }
-        catch (Exception ex)
-        {
-            _statusText.Text = $"Startfehler: {ex.Message}";
-            _statusText.Foreground = new SolidColorBrush(
-                Color.Parse("#FCA5A5"));
-        }
-    }
-
-    private async void OnRefreshTimerTick(object? sender, EventArgs eventArgs)
-    {
-        await RefreshAsync();
-    }
-
-    private async Task RefreshAsync()
-    {
-        if (_runtime is null || _refreshInProgress)
-        {
-            return;
-        }
-
-        _refreshInProgress = true;
-
-        try
-        {
-            var party = await _runtime.LivePartySource.ReadPartyAsync(
-                CancellationToken.None);
-
-            var pokemon = await _runtime.KnownPokemonStore.GetAllAsync(
-                CancellationToken.None);
-
-            RenderParty(party);
-            RenderPokemon(pokemon);
-
-            _statusText.Text =
-                $"Collector aktiv · Letzte Aktualisierung {DateTime.Now:HH:mm:ss}";
-        }
-        catch (Exception ex)
-        {
-            _statusText.Text = $"Aktualisierungsfehler: {ex.Message}";
-        }
-        finally
-        {
-            _refreshInProgress = false;
-        }
-    }
-
-    private void RenderParty(IReadOnlyList<PartySlot> party)
+    private void RenderParty()
     {
         _partyPanel.Children.Clear();
 
-        var occupiedSlots = party
-            .Where(slot => slot.Pokemon is not null)
-            .OrderBy(slot => slot.SlotId)
-            .ToList();
-
-        _partyCountText.Text = $"{occupiedSlots.Count} / 6";
-
-        if (occupiedSlots.Count == 0)
+        if (_viewModel.Party.Count == 0)
         {
             _partyPanel.Children.Add(CreateEmptyState(
                 "Warte auf Teamdaten vom Emulator …"));
             return;
         }
 
-        foreach (var slot in occupiedSlots)
+        foreach (var pokemon in _viewModel.Party)
         {
-            var pokemon = slot.Pokemon!;
-            var button = CreatePokemonButton(
-                pokemon.Nickname,
-                pokemon.SpeciesName,
-                pokemon.Level,
-                $"KP {pokemon.Hp.Current}/{pokemon.Hp.Max}",
-                () => ShowPartyPokemonDetails(pokemon));
-
-            _partyPanel.Children.Add(button);
+            _partyPanel.Children.Add(CreatePokemonCard(pokemon));
         }
     }
 
-    private void RenderPokemon(IReadOnlyList<KnownPokemonEntry> pokemon)
+    private void RenderStoredPokemon()
     {
         _pokemonPanel.Children.Clear();
-        _pokemonCountText.Text = $"{pokemon.Count} Pokémon";
 
-        if (pokemon.Count == 0)
+        if (_viewModel.StoredPokemon.Count == 0)
         {
             _pokemonPanel.Children.Add(CreateEmptyState(
                 "Noch keine Pokémon lokal gespeichert."));
             return;
         }
 
-        foreach (var entry in pokemon.OrderByDescending(item => item.FirstSeenAt))
+        foreach (var pokemon in _viewModel.StoredPokemon)
         {
-            var syncStatus = entry.SoullockeSynced
-                ? "Soullocke synchronisiert"
-                : entry.Location;
-
-            var button = CreatePokemonButton(
-                entry.Nickname,
-                entry.Species,
-                entry.CurrentLevel,
-                syncStatus,
-                () => ShowStoredPokemonDetails(entry));
-
-            _pokemonPanel.Children.Add(button);
+            _pokemonPanel.Children.Add(CreatePokemonCard(pokemon));
         }
     }
 
-    private static Control CreateEmptyState(string text)
+    private Control CreatePokemonCard(PokemonCardViewModel pokemon)
     {
-        var border = new Border
-        {
-            Background = new SolidColorBrush(Color.Parse("#111827")),
-            CornerRadius = new CornerRadius(10),
-            Padding = new Thickness(14)
-        };
+        var panel = new StackPanel { Spacing = 8 };
 
-        var label = CreateText(
-            text,
-            13,
-            FontWeight.Normal,
-            "#94A3B8");
-
-        label.TextWrapping = TextWrapping.Wrap;
-        border.Child = label;
-        return border;
-    }
-
-    private static Button CreatePokemonButton(
-        string? nickname,
-        string species,
-        int level,
-        string subtitle,
-        Action onClick)
-    {
-        var displayName = string.IsNullOrWhiteSpace(nickname)
-            ? species
-            : nickname;
-
-        var speciesSuffix = string.Equals(
-            displayName,
-            species,
-            StringComparison.OrdinalIgnoreCase)
-            ? string.Empty
-            : $" · {species}";
-
-        var textPanel = new StackPanel
-        {
-            Spacing = 3
-        };
-
-        textPanel.Children.Add(CreateText(
-            $"{displayName}{speciesSuffix}",
-            15,
+        panel.Children.Add(Text(
+            pokemon.NameLine,
+            16,
             FontWeight.SemiBold,
             "#F8FAFC"));
 
-        textPanel.Children.Add(CreateText(
-            $"Level {level} · {subtitle}",
+        var infoGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto")
+        };
+        infoGrid.Children.Add(Text(
+            pokemon.LevelText,
+            12,
+            FontWeight.Medium,
+            "#93C5FD"));
+
+        var subtitle = Text(
+            pokemon.Subtitle,
             12,
             FontWeight.Normal,
-            "#94A3B8"));
+            "#94A3B8");
+        subtitle.Margin = new Thickness(12, 0);
+        Grid.SetColumn(subtitle, 1);
+        infoGrid.Children.Add(subtitle);
+
+        var hpText = Text(
+            pokemon.HpText,
+            12,
+            FontWeight.Medium,
+            "#CBD5E1");
+        Grid.SetColumn(hpText, 2);
+        infoGrid.Children.Add(hpText);
+        panel.Children.Add(infoGrid);
+
+        panel.Children.Add(new ProgressBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Value = pokemon.HpPercentage,
+            Height = 7,
+            CornerRadius = new CornerRadius(4),
+            Background = Brush("#263650"),
+            Foreground = Brush(GetHpColor(pokemon.HpPercentage))
+        });
 
         var button = new Button
         {
-            HorizontalContentAlignment = HorizontalAlignment.Stretch,
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            Padding = new Thickness(13, 11),
-            Background = new SolidColorBrush(Color.Parse("#111827")),
-            BorderBrush = new SolidColorBrush(Color.Parse("#334155")),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(14, 13),
+            Background = Brush("#0F1829"),
+            BorderBrush = Brush("#344763"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(10),
-            Content = textPanel
+            CornerRadius = new CornerRadius(12),
+            Content = panel
         };
-
-        button.Click += (_, _) => onClick();
+        button.Click += (_, _) => _viewModel.SelectPokemon(pokemon);
         return button;
     }
 
-    private void ShowPartyPokemonDetails(PartyPokemon pokemon)
+    private static Control CreateEmptyState(string value)
     {
-        _detailsTitle.Text = string.IsNullOrWhiteSpace(pokemon.Nickname)
-            ? pokemon.SpeciesName
-            : pokemon.Nickname;
-
-        _detailsText.Text =
-            $"Spezies: {pokemon.SpeciesName} (#{pokemon.Species})\n" +
-            $"Level: {pokemon.Level}\n" +
-            $"KP: {pokemon.Hp.Current}/{pokemon.Hp.Max}\n" +
-            $"Fanglevel: {pokemon.LevelMet}\n" +
-            $"Fangort-ID: {pokemon.LocationMet}\n" +
-            $"PID: {pokemon.Pid}\n" +
-            $"Trainer-ID: {pokemon.OriginalTrainerId}\n" +
-            $"Secret-ID: {pokemon.OriginalTrainerSecretId}";
+        return new Border
+        {
+            Background = Brush("#0F1829"),
+            CornerRadius = new CornerRadius(12),
+            Padding = new Thickness(16),
+            Child = Text(
+                value,
+                13,
+                FontWeight.Normal,
+                "#94A3B8")
+        };
     }
 
-    private void ShowStoredPokemonDetails(KnownPokemonEntry pokemon)
+    private static string GetHpColor(double percentage)
     {
-        _detailsTitle.Text = string.IsNullOrWhiteSpace(pokemon.Nickname)
-            ? pokemon.Species
-            : pokemon.Nickname;
+        if (percentage <= 20)
+        {
+            return "#F87171";
+        }
 
-        _detailsText.Text =
-            $"Spezies: {pokemon.Species} (#{pokemon.SpeciesId})\n" +
-            $"Level: {pokemon.CurrentLevel}\n" +
-            $"KP: {pokemon.CurrentHp}/{pokemon.MaxHp}\n" +
-            $"Fangort: {pokemon.Location}\n" +
-            $"Fanglevel: {pokemon.LevelMet}\n" +
-            $"PID: {pokemon.Pid}\n" +
-            $"Erstmals erkannt: {pokemon.FirstSeenAt.LocalDateTime:g}\n" +
-            $"Zuletzt gesehen: {pokemon.LastSeenAt.LocalDateTime:g}\n" +
-            $"Soullocke: {(pokemon.SoullockeSynced ? "synchronisiert" : "ausstehend")}";
+        if (percentage <= 50)
+        {
+            return "#FBBF24";
+        }
+
+        return "#4ADE80";
+    }
+
+    private static TextBlock Text(
+        string value,
+        double fontSize,
+        FontWeight fontWeight,
+        string color)
+    {
+        return new TextBlock
+        {
+            Text = value,
+            FontSize = fontSize,
+            FontWeight = fontWeight,
+            Foreground = Brush(color)
+        };
+    }
+
+    private static SolidColorBrush Brush(string color)
+    {
+        return new SolidColorBrush(Color.Parse(color));
+    }
+
+    private async void OnOpened(object? sender, EventArgs eventArgs)
+    {
+        RenderParty();
+        RenderStoredPokemon();
+        await _viewModel.InitializeAsync();
     }
 
     private async void OnClosing(
         object? sender,
         WindowClosingEventArgs eventArgs)
     {
-        _refreshTimer.Stop();
-
-        if (_runtime is not null)
-        {
-            await _runtime.DisposeAsync();
-            _runtime = null;
-        }
+        await _viewModel.DisposeAsync();
     }
 }
