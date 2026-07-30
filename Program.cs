@@ -104,8 +104,13 @@ using var httpClient = new HttpClient
     Timeout = TimeSpan.FromSeconds(15)
 };
 
-IPartySource partySource =
+var snapshotPartySource =
     new JsonPartySource(partyJsonPath);
+
+var livePartySource =
+    new LivePartySource(snapshotPartySource);
+
+IPartySource partySource = livePartySource;
 
 var soullockeClient =
     new SoullockeClient(
@@ -128,7 +133,8 @@ var syncService =
 
 var collectorEventSource =
     new JsonLineCollectorEventSource(
-        eventFilePath);
+        eventFilePath,
+        livePartySource);
 
 using var cancellationSource =
     new CancellationTokenSource();
