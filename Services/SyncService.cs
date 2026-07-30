@@ -11,6 +11,7 @@ public sealed class SyncService
     private readonly SoullockeClient _soullockeClient;
     private readonly KnownPokemonStore _knownPokemon;
     private readonly LocationMapper _locationMapper;
+    private readonly HashSet<string> _dryRunProcessedPokemonIds = [];
 
     public SyncService(
         IPartySource partySource,
@@ -32,8 +33,16 @@ public sealed class SyncService
 
         Console.WriteLine("SoulSync läuft.");
         Console.WriteLine($"party.json: {_config.PartyJsonPath}");
-        Console.WriteLine($"Spieler: {_config.PlayerId}");
-        Console.WriteLine($"DryRun: {_config.DryRun}");
+        Console.WriteLine(
+            _config.SoullockeEnabled
+                ? $"Soullocke: aktiviert ({_config.PlayerId})"
+                : "Soullocke: deaktiviert – Pokémon werden nur lokal gespeichert.");
+
+        if (_config.SoullockeEnabled)
+        {
+            Console.WriteLine($"DryRun: {_config.DryRun}");
+        }
+
         Console.WriteLine("Zum Beenden Strg+C drücken.");
         Console.WriteLine();
 
@@ -75,49 +84,69 @@ public sealed class SyncService
             }
 
             var uniqueId = CreateUniqueId(pokemon);
+            var isKnownLocally = _knownPokemon.Contains(uniqueId);
 
-            if (_knownPokemon.Contains(uniqueId))
+            if (!_config.SoullockeEnabled && isKnownLocally)
             {
                 continue;
             }
 
-            var locationName =
+            if (_config.SoullockeEnabled &&
+                (_knownPokemon.IsSoullockeSynced(uniqueId) ||
+                 _dryRunProcessedPokemonIds.Contains(uniqueId)))
+            {
+                continue;
+            }
+
+            var mappedLocationName =
                 _locationMapper.GetLocationName(pokemon.LocationMet);
+            var localLocationName = mappedLocationName ??
+                                    $"Unbekannter Fangort ({pokemon.LocationMet})";
 
-            Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss}] Neues Pokémon erkannt: " +
-                $"{pokemon.Nickname} ({pokemon.SpeciesName}), " +
-                $"PID {pokemon.Pid}, Fangort-ID {pokemon.LocationMet}");
-
-            if (locationName is null)
+            if (!isKnownLocally)
             {
                 Console.WriteLine(
-                    $"  Fangort-ID {pokemon.LocationMet} ist noch nicht zugeordnet.");
+                    $"[{DateTime.Now:HH:mm:ss}] Neues Pokémon erkannt: " +
+                    $"{pokemon.Nickname} ({pokemon.SpeciesName}), " +
+                    $"PID {pokemon.Pid}, Fangort-ID {pokemon.LocationMet}");
 
-                // Noch nicht als bekannt speichern, damit es erneut versucht wird.
+                await _knownPokemon.AddAsync(
+                    uniqueId,
+                    new KnownPokemonEntry
+                    {
+                        Species = pokemon.SpeciesName,
+                        Nickname = pokemon.Nickname,
+                        Location = localLocationName,
+                        LocationId = pokemon.LocationMet
+                    },
+                    cancellationToken);
+
+                Console.WriteLine("  Lokal in soulbuddy.db gespeichert.");
+            }
+
+            if (!_config.SoullockeEnabled)
+            {
                 continue;
             }
 
-            var run = await _soullockeClient.LoadRunAsync(
-                cancellationToken);
-
-            if (run.Encounters.ContainsKey(locationName))
+            if (mappedLocationName is null)
             {
                 Console.WriteLine(
-                    $"  Nicht importiert: {locationName} ist bereits belegt.");
+                    $"  Soullocke-Synchronisierung ausstehend: " +
+                    $"Fangort-ID {pokemon.LocationMet} ist noch nicht zugeordnet.");
+                continue;
+            }
 
-                // Damit dieselbe Meldung nicht jede Sekunde erscheint.
-                await _knownPokemon.AddAsync(
-                uniqueId,
-                new KnownPokemonEntry
-                {
-                    Species = pokemon.SpeciesName,
-                    Nickname = pokemon.Nickname,
-                    Location = locationName,
-                    LocationId = pokemon.LocationMet
-                },
-                cancellationToken);
+            var run = await _soullockeClient.LoadRunAsync(cancellationToken);
 
+            if (run.Encounters.ContainsKey(mappedLocationName))
+            {
+                Console.WriteLine(
+                    $"  Nicht importiert: {mappedLocationName} ist bereits belegt.");
+
+                await _knownPokemon.MarkSoullockeSyncedAsync(
+                    uniqueId,
+                    cancellationToken);
                 continue;
             }
 
@@ -136,30 +165,24 @@ public sealed class SyncService
             {
                 Console.WriteLine(
                     $"  DRY RUN: Würde {pokemon.SpeciesName} unter " +
-                    $"„{locationName}“ mit Status „{encounter.Status}“ eintragen.");
-            }
-            else
-            {
-                run.Encounters[locationName] = encounter;
-
-                await _soullockeClient.SaveRunAsync(
-                    run.Encounters,
-                    cancellationToken);
-
-                Console.WriteLine(
-                    $"  Erfolgreich unter „{locationName}“ eingetragen.");
+                    $"„{mappedLocationName}“ mit Status " +
+                    $"„{encounter.Status}“ eintragen.");
+                _dryRunProcessedPokemonIds.Add(uniqueId);
+                continue;
             }
 
-            await _knownPokemon.AddAsync(
-            uniqueId,
-            new KnownPokemonEntry
-            {
-                Species = pokemon.SpeciesName,
-                Nickname = pokemon.Nickname,
-                Location = locationName,
-                LocationId = pokemon.LocationMet
-            },
-            cancellationToken);
+            run.Encounters[mappedLocationName] = encounter;
+
+            await _soullockeClient.SaveRunAsync(
+                run.Encounters,
+                cancellationToken);
+
+            await _knownPokemon.MarkSoullockeSyncedAsync(
+                uniqueId,
+                cancellationToken);
+
+            Console.WriteLine(
+                $"  Erfolgreich unter „{mappedLocationName}“ eingetragen.");
         }
     }
 
