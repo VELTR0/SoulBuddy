@@ -9,4 +9,9 @@ public sealed class CollectorEvent
     public string? Game { get; init; }
 
     public long Timestamp { get; init; }
+
+    public int? Generation { get; init; }
+
+    public IReadOnlyList<PartySlot> Slots { get; init; } =
+        Array.Empty<PartySlot>();
 }

@@ -139,12 +139,11 @@ public sealed class JsonLineCollectorEventSource
         switch (collectorEvent.Type)
         {
             case "collector-started":
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] " +
-                    $"Collector erkannt. " +
-                    $"Spiel: {collectorEvent.Game ?? "unbekannt"}, " +
-                    $"Protokoll: {collectorEvent.ProtocolVersion}");
+                HandleCollectorStarted(collectorEvent);
+                break;
 
+            case "party-update":
+                HandlePartyUpdate(collectorEvent);
                 break;
 
             default:
@@ -155,5 +154,62 @@ public sealed class JsonLineCollectorEventSource
 
                 break;
         }
+    }
+
+    private static void HandleCollectorStarted(
+        CollectorEvent collectorEvent)
+    {
+        Console.WriteLine(
+            $"[{DateTime.Now:HH:mm:ss}] " +
+            $"Collector erkannt. " +
+            $"Spiel: {collectorEvent.Game ?? "unbekannt"}, " +
+            $"Protokoll: {collectorEvent.ProtocolVersion}");
+    }
+
+    private static void HandlePartyUpdate(
+        CollectorEvent collectorEvent)
+    {
+        var generationText =
+            collectorEvent.Generation?.ToString()
+            ?? "unbekannt";
+
+        Console.WriteLine(
+            $"[{DateTime.Now:HH:mm:ss}] " +
+            $"Party-Update empfangen. " +
+            $"Spiel: {collectorEvent.Game ?? "unbekannt"}, " +
+            $"Generation: {generationText}, " +
+            $"Slots: {collectorEvent.Slots.Count}");
+
+        foreach (var slot in collectorEvent.Slots)
+        {
+            PrintSlot(slot);
+        }
+    }
+
+    private static void PrintSlot(PartySlot slot)
+    {
+        if (slot.Pokemon is null)
+        {
+            Console.WriteLine(
+                $"  Slot {slot.SlotId}: leer " +
+                $"(Change-ID: {slot.ChangeId})");
+
+            return;
+        }
+
+        var pokemon = slot.Pokemon;
+
+        var displayName =
+            string.IsNullOrWhiteSpace(pokemon.Nickname)
+                ? pokemon.SpeciesName
+                : $"{pokemon.Nickname} ({pokemon.SpeciesName})";
+
+        Console.WriteLine(
+            $"  Slot {slot.SlotId}: " +
+            $"{displayName}, " +
+            $"Level {pokemon.Level}, " +
+            $"KP {pokemon.Hp.Current}/{pokemon.Hp.Max}, " +
+            $"PID {pokemon.Pid}, " +
+            $"Change-ID {slot.ChangeId}");
     }
 }
