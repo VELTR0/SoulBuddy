@@ -13,8 +13,8 @@ public sealed class KnownPokemonEntry
 public sealed class KnownPokemonStore
 {
     private readonly string _connectionString;
-
     private readonly HashSet<string> _knownPokemonIds = [];
+    private readonly HashSet<string> _soullockeSyncedPokemonIds = [];
 
     public KnownPokemonStore(string databasePath)
     {
@@ -31,22 +31,18 @@ public sealed class KnownPokemonStore
         }.ToString();
     }
 
-    public async Task LoadAsync(
-        CancellationToken cancellationToken)
+    public async Task LoadAsync(CancellationToken cancellationToken)
     {
         await using var connection =
             new SqliteConnection(_connectionString);
 
         await connection.OpenAsync(cancellationToken);
-
-        await CreateTableAsync(
-            connection,
-            cancellationToken);
+        await CreateTableAsync(connection, cancellationToken);
+        await EnsureSoullockeSyncedColumnAsync(connection, cancellationToken);
 
         await using var command = connection.CreateCommand();
-
         command.CommandText = """
-            SELECT unique_id
+            SELECT unique_id, soullocke_synced
             FROM known_pokemon;
             """;
 
@@ -55,14 +51,24 @@ public sealed class KnownPokemonStore
 
         while (await reader.ReadAsync(cancellationToken))
         {
-            _knownPokemonIds.Add(
-                reader.GetString(0));
+            var id = reader.GetString(0);
+            _knownPokemonIds.Add(id);
+
+            if (reader.GetInt32(1) != 0)
+            {
+                _soullockeSyncedPokemonIds.Add(id);
+            }
         }
     }
 
     public bool Contains(string id)
     {
         return _knownPokemonIds.Contains(id);
+    }
+
+    public bool IsSoullockeSynced(string id)
+    {
+        return _soullockeSyncedPokemonIds.Contains(id);
     }
 
     public async Task AddAsync(
@@ -79,13 +85,10 @@ public sealed class KnownPokemonStore
             new SqliteConnection(_connectionString);
 
         await connection.OpenAsync(cancellationToken);
-
-        await CreateTableAsync(
-            connection,
-            cancellationToken);
+        await CreateTableAsync(connection, cancellationToken);
+        await EnsureSoullockeSyncedColumnAsync(connection, cancellationToken);
 
         await using var command = connection.CreateCommand();
-
         command.CommandText = """
             INSERT OR IGNORE INTO known_pokemon
             (
@@ -94,7 +97,8 @@ public sealed class KnownPokemonStore
                 nickname,
                 location,
                 location_id,
-                first_seen_at
+                first_seen_at,
+                soullocke_synced
             )
             VALUES
             (
@@ -103,40 +107,47 @@ public sealed class KnownPokemonStore
                 $nickname,
                 $location,
                 $locationId,
-                $firstSeenAt
+                $firstSeenAt,
+                0
             );
             """;
 
-        command.Parameters.AddWithValue(
-            "$uniqueId",
-            id);
-
-        command.Parameters.AddWithValue(
-            "$species",
-            entry.Species);
-
+        command.Parameters.AddWithValue("$uniqueId", id);
+        command.Parameters.AddWithValue("$species", entry.Species);
         command.Parameters.AddWithValue(
             "$nickname",
-            entry.Nickname is null
-                ? DBNull.Value
-                : entry.Nickname);
-
-        command.Parameters.AddWithValue(
-            "$location",
-            entry.Location);
-
-        command.Parameters.AddWithValue(
-            "$locationId",
-            entry.LocationId);
-
+            entry.Nickname is null ? DBNull.Value : entry.Nickname);
+        command.Parameters.AddWithValue("$location", entry.Location);
+        command.Parameters.AddWithValue("$locationId", entry.LocationId);
         command.Parameters.AddWithValue(
             "$firstSeenAt",
             DateTimeOffset.UtcNow.ToString("O"));
 
-        await command.ExecuteNonQueryAsync(
-            cancellationToken);
-
+        await command.ExecuteNonQueryAsync(cancellationToken);
         _knownPokemonIds.Add(id);
+    }
+
+    public async Task MarkSoullockeSyncedAsync(
+        string id,
+        CancellationToken cancellationToken)
+    {
+        await using var connection =
+            new SqliteConnection(_connectionString);
+
+        await connection.OpenAsync(cancellationToken);
+        await CreateTableAsync(connection, cancellationToken);
+        await EnsureSoullockeSyncedColumnAsync(connection, cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE known_pokemon
+            SET soullocke_synced = 1
+            WHERE unique_id = $uniqueId;
+            """;
+        command.Parameters.AddWithValue("$uniqueId", id);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        _soullockeSyncedPokemonIds.Add(id);
     }
 
     private static async Task CreateTableAsync(
@@ -144,7 +155,6 @@ public sealed class KnownPokemonStore
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-
         command.CommandText = """
             CREATE TABLE IF NOT EXISTS known_pokemon
             (
@@ -153,11 +163,50 @@ public sealed class KnownPokemonStore
                 nickname TEXT NULL,
                 location TEXT NOT NULL,
                 location_id INTEGER NOT NULL,
-                first_seen_at TEXT NOT NULL
+                first_seen_at TEXT NOT NULL,
+                soullocke_synced INTEGER NOT NULL DEFAULT 0
             );
             """;
 
-        await command.ExecuteNonQueryAsync(
-            cancellationToken);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task EnsureSoullockeSyncedColumnAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var checkCommand = connection.CreateCommand();
+        checkCommand.CommandText = "PRAGMA table_info(known_pokemon);";
+
+        var columnExists = false;
+
+        await using (var reader =
+                     await checkCommand.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (string.Equals(
+                        reader.GetString(1),
+                        "soullocke_synced",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    columnExists = true;
+                    break;
+                }
+            }
+        }
+
+        if (columnExists)
+        {
+            return;
+        }
+
+        await using var alterCommand = connection.CreateCommand();
+        alterCommand.CommandText = """
+            ALTER TABLE known_pokemon
+            ADD COLUMN soullocke_synced INTEGER NOT NULL DEFAULT 0;
+            """;
+
+        await alterCommand.ExecuteNonQueryAsync(cancellationToken);
     }
 }
