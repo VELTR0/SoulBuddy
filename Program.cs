@@ -36,7 +36,9 @@ var config = JsonSerializer.Deserialize<AppConfig>(
 
 if (config is null)
 {
-    Console.WriteLine("appsettings.json ist ungültig.");
+    Console.WriteLine(
+        "appsettings.json ist ungültig.");
+
     return;
 }
 
@@ -76,6 +78,23 @@ var partyJsonPath = Path.IsPathRooted(config.PartyJsonPath)
             baseDirectory,
             config.PartyJsonPath));
 
+var runtimeDirectory =
+    Path.GetDirectoryName(partyJsonPath);
+
+if (string.IsNullOrWhiteSpace(runtimeDirectory))
+{
+    Console.WriteLine(
+        "Der Runtime-Ordner konnte nicht bestimmt werden.");
+
+    return;
+}
+
+Directory.CreateDirectory(runtimeDirectory);
+
+var eventFilePath = Path.Combine(
+    runtimeDirectory,
+    "emulator-events.jsonl");
+
 var databasePath = Path.Combine(
     baseDirectory,
     "soulbuddy.db");
@@ -107,6 +126,10 @@ var syncService =
         locationMapper,
         config);
 
+var collectorEventSource =
+    new JsonLineCollectorEventSource(
+        eventFilePath);
+
 using var cancellationSource =
     new CancellationTokenSource();
 
@@ -116,5 +139,18 @@ Console.CancelKeyPress += (_, eventArgs) =>
     cancellationSource.Cancel();
 };
 
-await syncService.RunAsync(
-    cancellationSource.Token);
+try
+{
+    await Task.WhenAll(
+        syncService.RunAsync(
+            cancellationSource.Token),
+        collectorEventSource.RunAsync(
+            cancellationSource.Token));
+}
+catch (OperationCanceledException)
+    when (cancellationSource.IsCancellationRequested)
+{
+    Console.WriteLine();
+    Console.WriteLine(
+        "SoulBuddy wurde beendet.");
+}

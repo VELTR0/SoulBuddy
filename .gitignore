@@ -4,5 +4,6 @@ soulbuddy.db
 soulbuddy.db-shm
 soulbuddy.db-wal
 appsettings.local.json
+runtime/
 bin/
 obj/

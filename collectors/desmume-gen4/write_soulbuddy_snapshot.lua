@@ -1,25 +1,74 @@
--- local server_host = 'xlink.cybershade.org'
-
 local print_debug_messages = true
+
 local print_debug = require("print_debug")
 print_debug = print_debug(print_debug_messages)
 
 local json = require("dkjson")
+
+local snapshot_file_path = "party.json"
+
+local event_file_path =
+    "C:/Users/pasca/Documents/SoulBuddy/bin/Debug/net8.0/runtime/emulator-events.jsonl"
 
 local change_ids = { 0, 0, 0, 0, 0, 0 }
 local box_change_ids = {}
 
 for box = 1, 18 do
     box_change_ids[box] = {}
+
     for box_slot = 1, 30 do
         box_change_ids[box][box_slot] = 0
     end
 end
 
+local function write_snapshot(request_body)
+    local file, open_error = io.open(snapshot_file_path, "w")
+
+    if file == nil then
+        print("[SoulBuddy] Could not open snapshot file.")
+        print("[SoulBuddy] Path: " .. snapshot_file_path)
+        print("[SoulBuddy] Error: " .. tostring(open_error))
+        return false
+    end
+
+    file:write(request_body)
+    file:flush()
+    file:close()
+
+    return true
+end
+
+local function append_event(event)
+    local event_json = json.encode(event)
+
+    if event_json == nil then
+        print("[SoulBuddy] Could not encode collector event.")
+        return false
+    end
+
+    local file, open_error = io.open(event_file_path, "a")
+
+    if file == nil then
+        print("[SoulBuddy] Could not open event file.")
+        print("[SoulBuddy] Path: " .. event_file_path)
+        print("[SoulBuddy] Error: " .. tostring(open_error))
+        return false
+    end
+
+    file:write(event_json)
+    file:write("\n")
+    file:flush()
+    file:close()
+
+    return true
+end
+
 function reset_server()
-	file = io.open("party.json", "w")
-	file:write('{}')
-	file:close()
+    local success = write_snapshot("{}")
+
+    if not success then
+        print("[SoulBuddy] Failed to reset snapshot.")
+    end
 end
 
 function get_game_version(gen, game, subgame)
@@ -43,6 +92,7 @@ function get_game_version(gen, game, subgame)
         end
 
         game = game % 3
+
         return game == 0 and (subgame == 0 and "fr" or "lg")
             or game == 1 and (subgame == 0 and "r" or "s")
             or "e"
@@ -55,7 +105,7 @@ function get_game_version(gen, game, subgame)
         return game == 1 and (subgame == 1 and "d" or "p")
             or game == 2 and (subgame == 1 and "hg" or "ss")
             or "pt"
-    else -- gen 5
+    else
         if game < 4 or game > 7 then
             print("[ERROR] Invalid game selected for gen 5:", game)
             return nil
@@ -68,47 +118,86 @@ function get_game_version(gen, game, subgame)
     end
 end
 
-function write_file(request_body, generation, game_version)
-    local pretty_print = string.gsub(request_body, "\n", "\r\n");
+function write_file(request_body, generation, game_version, slots)
+    local pretty_print = string.gsub(request_body, "\n", "\r\n")
     print_debug(pretty_print)
 
-    file = io.open("party.json", "w")
-	file:write(request_body)
-    file:close()
+    if not write_snapshot(request_body) then
+        return false
+    end
+
+    local event = {
+        protocolVersion = 1,
+        type = "party-update",
+        timestamp = os.time(),
+        generation = generation,
+        game = game_version,
+        slots = slots
+    }
+
+    if not append_event(event) then
+        return false
+    end
+
+    print("[SoulBuddy] Party update written.")
+    print("[SoulBuddy] Updated slots: " .. tostring(#slots))
 
     return true
 end
 
 function send_slots(slots_info, generation, game, subgame)
     local game_version = get_game_version(generation, game, subgame)
+
     if game_version == nil then
         return true
     end
 
     local tmp_info = {}
-    for i, v in ipairs(slots_info) do
-        tmp_info[#tmp_info + 1] = get_slot_data(v, generation)
+
+    for _, value in ipairs(slots_info) do
+        tmp_info[#tmp_info + 1] = get_slot_data(value, generation)
     end
 
     if #tmp_info <= 20 then
-        local request_body = json.encode(tmp_info, { indent = print_debug_messages })
-        return write_file(request_body, generation, game_version)
-    else
-        local idx = 1
-        while idx < #tmp_info do
-            local batch = {}
-            for i = 1, 20 do
-                batch[i] = tmp_info[idx]
-                idx = idx + 1
-                if idx > #tmp_info then
-                    break
-                end
-            end
+        local request_body = json.encode(
+            tmp_info,
+            { indent = print_debug_messages }
+        )
 
-            local request_body = json.encode(batch, { indent = print_debug_messages })
-            if not write_file(request_body, generation, game_version) then
-                return false
+        return write_file(
+            request_body,
+            generation,
+            game_version,
+            tmp_info
+        )
+    end
+
+    local index = 1
+
+    while index <= #tmp_info do
+        local batch = {}
+
+        for batch_index = 1, 20 do
+            batch[batch_index] = tmp_info[index]
+            index = index + 1
+
+            if index > #tmp_info then
+                break
             end
+        end
+
+        local request_body = json.encode(
+            batch,
+            { indent = print_debug_messages }
+        )
+
+        if not write_file(
+            request_body,
+            generation,
+            game_version,
+            batch
+        ) then
+            return false
         end
     end
 
@@ -120,22 +209,24 @@ function get_slot_data(info, generation)
     local slot = info.slot_id
     local pokemon = info.pokemon
 
-    if info.box_id ~= nil then
+    if box_id ~= nil then
         local change_id = box_change_ids[box_id][slot]
-        box_change_ids[box_id][slot] = box_change_ids[box_id][slot] + 1
+        box_change_ids[box_id][slot] = change_id + 1
+
         return {
             box = box_id,
             slotId = slot,
             changeId = change_id,
             pokemon = pokemon:toJsonSerializableTable(generation)
         }
-    else
-        local change_id = change_ids[slot]
-        change_ids[slot] = change_ids[slot] + 1
-        return {
-            slotId = slot,
-            changeId = change_id,
-            pokemon = pokemon:toJsonSerializableTable(generation)
-        }
     end
+
+    local change_id = change_ids[slot]
+    change_ids[slot] = change_id + 1
+
+    return {
+        slotId = slot,
+        changeId = change_id,
+        pokemon = pokemon:toJsonSerializableTable(generation)
+    }
 end
