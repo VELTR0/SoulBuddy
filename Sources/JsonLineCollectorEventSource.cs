@@ -6,6 +6,9 @@ namespace SoulBuddy.Sources;
 public sealed class JsonLineCollectorEventSource
 {
     private readonly string _eventFilePath;
+    private readonly LivePartySource _partySource;
+    private long _readPosition;
+    private bool _readPositionInitialized;
 
     private readonly JsonSerializerOptions _jsonOptions =
         new()
@@ -13,16 +16,19 @@ public sealed class JsonLineCollectorEventSource
             PropertyNameCaseInsensitive = true
         };
 
-    public JsonLineCollectorEventSource(string eventFilePath)
+    public JsonLineCollectorEventSource(
+        string eventFilePath,
+        LivePartySource partySource)
     {
         _eventFilePath = eventFilePath;
+        _partySource = partySource;
     }
 
     public async Task RunAsync(
         CancellationToken cancellationToken)
     {
         Console.WriteLine(
-            $"Collector-Ereignisse: {_eventFilePath}");
+            $"Collector-Ereignisse: {Path.GetFileName(_eventFilePath)}");
 
         Console.WriteLine(
             "Warte auf Nachrichten vom Emulator.");
@@ -40,6 +46,7 @@ public sealed class JsonLineCollectorEventSource
 
             try
             {
+                InitializeReadPosition();
                 await ReadEventsAsync(cancellationToken);
             }
             catch (OperationCanceledException)
@@ -66,6 +73,17 @@ public sealed class JsonLineCollectorEventSource
         }
     }
 
+    private void InitializeReadPosition()
+    {
+        if (_readPositionInitialized)
+        {
+            return;
+        }
+
+        _readPosition = new FileInfo(_eventFilePath).Length;
+        _readPositionInitialized = true;
+    }
+
     private async Task ReadEventsAsync(
         CancellationToken cancellationToken)
     {
@@ -74,6 +92,13 @@ public sealed class JsonLineCollectorEventSource
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
+
+        if (_readPosition > stream.Length)
+        {
+            _readPosition = 0;
+        }
+
+        stream.Seek(_readPosition, SeekOrigin.Begin);
 
         using var reader = new StreamReader(stream);
 
@@ -84,18 +109,28 @@ public sealed class JsonLineCollectorEventSource
 
             if (line is null)
             {
+                _readPosition = stream.Position;
+
                 await Task.Delay(
                     250,
                     cancellationToken);
 
+                if (stream.Length < _readPosition)
+                {
+                    return;
+                }
+
                 continue;
             }
 
-            ProcessLine(line);
+            _readPosition = stream.Position;
+            await ProcessLineAsync(line, cancellationToken);
         }
     }
 
-    private void ProcessLine(string line)
+    private async Task ProcessLineAsync(
+        string line,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(line))
         {
@@ -130,11 +165,14 @@ public sealed class JsonLineCollectorEventSource
             return;
         }
 
-        HandleEvent(collectorEvent);
+        await HandleEventAsync(
+            collectorEvent,
+            cancellationToken);
     }
 
-    private static void HandleEvent(
-        CollectorEvent collectorEvent)
+    private async Task HandleEventAsync(
+        CollectorEvent collectorEvent,
+        CancellationToken cancellationToken)
     {
         switch (collectorEvent.Type)
         {
@@ -143,7 +181,9 @@ public sealed class JsonLineCollectorEventSource
                 break;
 
             case "party-update":
-                HandlePartyUpdate(collectorEvent);
+                await HandlePartyUpdateAsync(
+                    collectorEvent,
+                    cancellationToken);
                 break;
 
             default:
@@ -166,50 +206,23 @@ public sealed class JsonLineCollectorEventSource
             $"Protokoll: {collectorEvent.ProtocolVersion}");
     }
 
-    private static void HandlePartyUpdate(
-        CollectorEvent collectorEvent)
+    private async Task HandlePartyUpdateAsync(
+        CollectorEvent collectorEvent,
+        CancellationToken cancellationToken)
     {
+        await _partySource.ApplyUpdateAsync(
+            collectorEvent.Slots,
+            cancellationToken);
+
         var generationText =
             collectorEvent.Generation?.ToString()
             ?? "unbekannt";
 
         Console.WriteLine(
             $"[{DateTime.Now:HH:mm:ss}] " +
-            $"Party-Update empfangen. " +
+            $"Party-Update übernommen. " +
             $"Spiel: {collectorEvent.Game ?? "unbekannt"}, " +
             $"Generation: {generationText}, " +
-            $"Slots: {collectorEvent.Slots.Count}");
-
-        foreach (var slot in collectorEvent.Slots)
-        {
-            PrintSlot(slot);
-        }
-    }
-
-    private static void PrintSlot(PartySlot slot)
-    {
-        if (slot.Pokemon is null)
-        {
-            Console.WriteLine(
-                $"  Slot {slot.SlotId}: leer " +
-                $"(Change-ID: {slot.ChangeId})");
-
-            return;
-        }
-
-        var pokemon = slot.Pokemon;
-
-        var displayName =
-            string.IsNullOrWhiteSpace(pokemon.Nickname)
-                ? pokemon.SpeciesName
-                : $"{pokemon.Nickname} ({pokemon.SpeciesName})";
-
-        Console.WriteLine(
-            $"  Slot {slot.SlotId}: " +
-            $"{displayName}, " +
-            $"Level {pokemon.Level}, " +
-            $"KP {pokemon.Hp.Current}/{pokemon.Hp.Max}, " +
-            $"PID {pokemon.Pid}, " +
-            $"Change-ID {slot.ChangeId}");
+            $"geänderte Slots: {collectorEvent.Slots.Count}");
     }
 }
