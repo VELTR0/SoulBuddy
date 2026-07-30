@@ -18,6 +18,7 @@ public sealed class LivePartySource : IPartySource
         CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
+        await ReconcileWithSnapshotAsync(cancellationToken);
 
         await _gate.WaitAsync(cancellationToken);
 
@@ -51,6 +52,38 @@ public sealed class LivePartySource : IPartySource
                 }
 
                 _slots[slot.SlotId] = slot;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task ReconcileWithSnapshotAsync(
+        CancellationToken cancellationToken)
+    {
+        var snapshot = await _snapshotSource.ReadPartyAsync(
+            cancellationToken);
+
+        var snapshotBySlot = snapshot
+            .Where(slot => slot.SlotId is >= 1 and <= 6)
+            .ToDictionary(slot => slot.SlotId);
+
+        await _gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            for (var slotId = 1; slotId <= 6; slotId++)
+            {
+                if (snapshotBySlot.TryGetValue(slotId, out var slot))
+                {
+                    _slots[slotId] = slot;
+                }
+                else
+                {
+                    _slots.Remove(slotId);
+                }
             }
         }
         finally
