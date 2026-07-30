@@ -31,8 +31,13 @@ public sealed class SyncService
     {
         await _knownPokemon.LoadAsync(cancellationToken);
 
+        var locallyStoredPokemon =
+            await _knownPokemon.GetAllAsync(cancellationToken);
+
         Console.WriteLine("SoulSync läuft.");
         Console.WriteLine($"party.json: {_config.PartyJsonPath}");
+        Console.WriteLine(
+            $"Lokal gespeicherte Pokémon: {locallyStoredPokemon.Count}");
         Console.WriteLine(
             _config.SoullockeEnabled
                 ? $"Soullocke: aktiviert ({_config.PlayerId})"
@@ -86,18 +91,6 @@ public sealed class SyncService
             var uniqueId = CreateUniqueId(pokemon);
             var isKnownLocally = _knownPokemon.Contains(uniqueId);
 
-            if (!_config.SoullockeEnabled && isKnownLocally)
-            {
-                continue;
-            }
-
-            if (_config.SoullockeEnabled &&
-                (_knownPokemon.IsSoullockeSynced(uniqueId) ||
-                 _dryRunProcessedPokemonIds.Contains(uniqueId)))
-            {
-                continue;
-            }
-
             var mappedLocationName =
                 _locationMapper.GetLocationName(pokemon.LocationMet);
             var localLocationName = mappedLocationName ??
@@ -114,17 +107,43 @@ public sealed class SyncService
                     uniqueId,
                     new KnownPokemonEntry
                     {
+                        UniqueId = uniqueId,
+                        SpeciesId = pokemon.Species,
                         Species = pokemon.SpeciesName,
                         Nickname = pokemon.Nickname,
+                        Pid = pokemon.Pid,
+                        OriginalTrainerId = pokemon.OriginalTrainerId,
+                        OriginalTrainerSecretId =
+                            pokemon.OriginalTrainerSecretId,
                         Location = localLocationName,
-                        LocationId = pokemon.LocationMet
+                        LocationId = pokemon.LocationMet,
+                        LevelMet = pokemon.LevelMet,
+                        CurrentLevel = pokemon.Level,
+                        CurrentHp = pokemon.Hp.Current,
+                        MaxHp = pokemon.Hp.Max,
+                        IsEgg = pokemon.IsEgg
                     },
                     cancellationToken);
 
                 Console.WriteLine("  Lokal in soulbuddy.db gespeichert.");
             }
+            else
+            {
+                await _knownPokemon.UpdateCurrentStateAsync(
+                    uniqueId,
+                    pokemon.Level,
+                    pokemon.Hp.Current,
+                    pokemon.Hp.Max,
+                    cancellationToken);
+            }
 
             if (!_config.SoullockeEnabled)
+            {
+                continue;
+            }
+
+            if (_knownPokemon.IsSoullockeSynced(uniqueId) ||
+                _dryRunProcessedPokemonIds.Contains(uniqueId))
             {
                 continue;
             }
