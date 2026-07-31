@@ -110,7 +110,7 @@ public sealed class LocationMapper
             [123] = "Eisen-Ruinen",
             [124] = "Eisberg-Ruinen",
             [125] = "Felsen-Ruinen",
-            [126] = "Neuborkia",
+            [126] = "Starter",
             [127] = "Rosalia City",
             [128] = "Viola City",
             [129] = "Azalea City",
