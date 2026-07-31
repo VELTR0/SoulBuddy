@@ -515,7 +515,8 @@ public sealed class MainWindow : Window
         var statusGrid = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
-            ColumnSpacing = 5
+            ColumnSpacing = 5,
+            MinWidth = 0
         };
         statusGrid.Children.Add(Text(
             pokemon.LevelText,
@@ -528,6 +529,8 @@ public sealed class MainWindow : Window
             Minimum = 0,
             Maximum = 100,
             Value = pokemon.HpPercentage,
+            MinWidth = 0,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             Height = tiny ? 4 : 5,
             CornerRadius = new CornerRadius(3),
             Background = Brush("#263650"),
