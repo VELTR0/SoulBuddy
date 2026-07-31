@@ -7,6 +7,8 @@ public sealed class PlayerLiveStateSource
     private readonly object _sync = new();
     private PlayerLiveState _current = new();
 
+    public event EventHandler<PlayerLiveState>? StateChanged;
+
     public PlayerLiveState Read()
     {
         lock (_sync)
@@ -23,5 +25,7 @@ public sealed class PlayerLiveStateSource
         {
             _current = state;
         }
+
+        StateChanged?.Invoke(this, state);
     }
 }
