@@ -1,4 +1,4 @@
-local print_debug_messages = true
+local print_debug_messages = false
 
 local print_debug = require("print_debug")
 print_debug = print_debug(print_debug_messages)
@@ -41,7 +41,21 @@ for box = 1, 18 do
     end
 end
 
+local runtime_directory_checked = false
+
 local function ensure_runtime_directory()
+    if runtime_directory_checked then
+        return
+    end
+
+    runtime_directory_checked = true
+
+    local probe = io.open(runtime_directory .. "/.", "r")
+    if probe ~= nil then
+        probe:close()
+        return
+    end
+
     os.execute(
         'if not exist "' .. runtime_directory ..
         '" mkdir "' .. runtime_directory .. '"'
@@ -182,6 +196,7 @@ function write_file(request_body, generation, game_version, slots)
     if not is_box_update then
         print("[SoulBuddy] Snapshot: " .. snapshot_file_path)
     end
+
     print("[SoulBuddy] Events: " .. event_file_path)
     print("[SoulBuddy] Updated slots: " .. tostring(#slots))
 
