@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 
@@ -37,6 +38,7 @@ internal static class MainWindowLayoutUpdater
         {
             UpdateMainContentColumns(window);
             UpdatePartyGrid(window);
+            StackPartyHpBelowLevel(window);
             HideStoredPokemonHp(window);
         }
     }
@@ -60,10 +62,10 @@ internal static class MainWindowLayoutUpdater
             return;
         }
 
-        // Das Team benötigt durch das 2x3-Raster mehr Platz. Die Box-Liste
-        // erhält ungefähr die Hälfte ihrer bisherigen Breite.
+        // Die gespeicherte Liste bleibt kompakt, erhält aber etwas mehr Platz
+        // für Namen und Fangorte als in der vorherigen Fassung.
         contentGrid.ColumnDefinitions =
-            new ColumnDefinitions("2.2*,0.62*,1.1*");
+            new ColumnDefinitions("2.05*,0.78*,1.1*");
     }
 
     private static void UpdatePartyGrid(Window window)
@@ -89,6 +91,65 @@ internal static class MainWindowLayoutUpdater
         {
             Grid.SetRow(cards[index], index / 2);
             Grid.SetColumn(cards[index], index % 2);
+        }
+    }
+
+    private static void StackPartyHpBelowLevel(Window window)
+    {
+        var partyHeader = FindHeader(window, "Aktuelles Team");
+        var partySection = FindSectionGrid(partyHeader);
+        var partyGrid = partySection?.Children
+            .OfType<Grid>()
+            .FirstOrDefault(grid => Grid.GetRow(grid) == 1);
+
+        if (partyGrid is null)
+        {
+            return;
+        }
+
+        foreach (var progressBar in partyGrid
+                     .GetVisualDescendants()
+                     .OfType<ProgressBar>())
+        {
+            var hpGrid = progressBar
+                .GetVisualAncestors()
+                .OfType<Grid>()
+                .FirstOrDefault(grid => grid.Children.Contains(progressBar));
+
+            if (hpGrid is null || hpGrid.Children.Count < 3)
+            {
+                continue;
+            }
+
+            var levelText = hpGrid.Children
+                .OfType<TextBlock>()
+                .FirstOrDefault(text =>
+                    text.Text?.StartsWith("Level ", StringComparison.Ordinal) == true);
+            var hpText = hpGrid.Children
+                .OfType<TextBlock>()
+                .FirstOrDefault(text => IsHpText(text.Text));
+
+            if (levelText is null || hpText is null)
+            {
+                continue;
+            }
+
+            hpGrid.ColumnDefinitions = new ColumnDefinitions("*");
+            hpGrid.RowDefinitions = new RowDefinitions("Auto,Auto,Auto");
+            hpGrid.ColumnSpacing = 0;
+            hpGrid.RowSpacing = 2;
+
+            Grid.SetColumn(levelText, 0);
+            Grid.SetRow(levelText, 0);
+
+            Grid.SetColumn(progressBar, 0);
+            Grid.SetRow(progressBar, 1);
+            progressBar.HorizontalAlignment = HorizontalAlignment.Stretch;
+            progressBar.MinWidth = 0;
+
+            Grid.SetColumn(hpText, 0);
+            Grid.SetRow(hpText, 2);
+            hpText.HorizontalAlignment = HorizontalAlignment.Left;
         }
     }
 
