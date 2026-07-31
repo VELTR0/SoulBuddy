@@ -5,8 +5,24 @@ print_debug = print_debug(print_debug_messages)
 
 local json = require("dkjson")
 
-local runtime_directory =
-    "C:/Users/pasca/Documents/SoulBuddy/runtime"
+local function get_script_directory()
+    local source = debug.getinfo(1, "S").source
+
+    if string.sub(source, 1, 1) == "@" then
+        source = string.sub(source, 2)
+    end
+
+    local directory = string.match(source, "^(.*)[/\\]")
+
+    if directory == nil or directory == "" then
+        return "."
+    end
+
+    return directory
+end
+
+local script_directory = get_script_directory()
+local runtime_directory = script_directory .. "/../../runtime"
 
 local snapshot_file_path =
     runtime_directory .. "/party.json"
