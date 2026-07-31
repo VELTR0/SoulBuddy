@@ -3,6 +3,7 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using SoulBuddy.Models;
 
 namespace SoulBuddy.Services;
 
@@ -30,6 +31,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     private const int ProtocolVersion = 1;
 
     private readonly object _sync = new();
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly SynchronizationContext? _synchronizationContext =
         SynchronizationContext.Current;
 
@@ -37,7 +39,16 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     private TcpListener? _listener;
     private TcpClient? _client;
     private UdpClient? _discoveryClient;
+    private StreamReader? _reader;
+    private StreamWriter? _writer;
     private Task? _networkTask;
+
+    public SoulBuddyNetworkService()
+    {
+        Current = this;
+    }
+
+    public static SoulBuddyNetworkService? Current { get; private set; }
 
     public SoulBuddyNetworkMode Mode { get; private set; } =
         SoulBuddyNetworkMode.None;
@@ -46,15 +57,15 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         SoulBuddyNetworkState.Idle;
 
     public string SessionId { get; private set; } = string.Empty;
-
     public string PlayerName { get; private set; } = string.Empty;
-
     public string RemotePlayerName { get; private set; } = string.Empty;
+    public NetworkPlayerSnapshot? LatestRemoteSnapshot { get; private set; }
 
     public string StatusText { get; private set; } =
         "Netzwerk noch nicht gestartet.";
 
     public event EventHandler? StatusChanged;
+    public event EventHandler<NetworkPlayerSnapshot>? PlayerSnapshotReceived;
 
     public void PrepareHost(string sessionId, string playerName)
     {
@@ -68,14 +79,50 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         StartBackground(DiscoverAndJoinAsync);
     }
 
+    public async Task SendPlayerSnapshotAsync(
+        NetworkPlayerSnapshot snapshot,
+        CancellationToken cancellationToken = default)
+    {
+        if (State != SoulBuddyNetworkState.Connected || _writer is null)
+        {
+            return;
+        }
+
+        var envelope = new NetworkEnvelope
+        {
+            Type = "player-snapshot",
+            PlayerSnapshot = snapshot
+        };
+
+        await _sendLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_writer is not null)
+            {
+                await _writer.WriteLineAsync(
+                    JsonSerializer.Serialize(envelope));
+            }
+        }
+        catch (IOException ex)
+        {
+            SetStatus(
+                $"Synchronisierung fehlgeschlagen: {ex.Message}",
+                SoulBuddyNetworkState.Error);
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
+    }
+
     public void Reset()
     {
         StopCurrentConnection();
-
         Mode = SoulBuddyNetworkMode.None;
         SessionId = string.Empty;
         PlayerName = string.Empty;
         RemotePlayerName = string.Empty;
+        LatestRemoteSnapshot = null;
         SetStatus(
             "Netzwerk noch nicht gestartet.",
             SoulBuddyNetworkState.Idle);
@@ -99,11 +146,11 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         }
 
         StopCurrentConnection();
-
         Mode = mode;
         SessionId = sessionId.Trim();
         PlayerName = playerName.Trim();
         RemotePlayerName = string.Empty;
+        LatestRemoteSnapshot = null;
         State = SoulBuddyNetworkState.Prepared;
     }
 
@@ -162,8 +209,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         {
             await discoveryTask;
         }
-        catch (OperationCanceledException)
-            when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (ObjectDisposedException)
@@ -173,12 +219,8 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         {
         }
 
-        await CompleteHandshakeAsync(
-            _client,
-            isHost: true,
-            cancellationToken);
-
-        await KeepConnectionOpenAsync(_client, cancellationToken);
+        await CompleteHandshakeAsync(_client, isHost: true, cancellationToken);
+        await ReceiveMessagesAsync(cancellationToken);
     }
 
     private async Task RunDiscoveryResponderAsync(
@@ -190,28 +232,23 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         while (!cancellationToken.IsCancellationRequested)
         {
             UdpReceiveResult received;
-
             try
             {
-                received = await _discoveryClient.ReceiveAsync(
-                    cancellationToken);
+                received = await _discoveryClient.ReceiveAsync(cancellationToken);
             }
             catch (ObjectDisposedException)
             {
                 break;
             }
-            catch (SocketException)
-                when (cancellationToken.IsCancellationRequested)
+            catch (SocketException) when (cancellationToken.IsCancellationRequested)
             {
                 break;
             }
 
             DiscoveryMessage? request;
-
             try
             {
-                request = JsonSerializer.Deserialize<DiscoveryMessage>(
-                    received.Buffer);
+                request = JsonSerializer.Deserialize<DiscoveryMessage>(received.Buffer);
             }
             catch (JsonException)
             {
@@ -221,10 +258,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             if (request is null ||
                 request.Type != "discover" ||
                 request.ProtocolVersion != ProtocolVersion ||
-                !string.Equals(
-                    request.SessionId,
-                    SessionId,
-                    StringComparison.OrdinalIgnoreCase))
+                !string.Equals(request.SessionId, SessionId, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -238,49 +272,34 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
                 TcpPort = TcpPort
             };
 
-            var responseBytes = JsonSerializer.SerializeToUtf8Bytes(response);
             await _discoveryClient.SendAsync(
-                responseBytes,
+                JsonSerializer.SerializeToUtf8Bytes(response),
                 received.RemoteEndPoint,
                 cancellationToken);
         }
     }
 
-    private async Task DiscoverAndJoinAsync(
-        CancellationToken cancellationToken)
+    private async Task DiscoverAndJoinAsync(CancellationToken cancellationToken)
     {
         SetStatus(
             "Suche Host für diese Session im lokalen Netzwerk …",
             SoulBuddyNetworkState.Connecting);
 
         var host = await DiscoverHostAsync(cancellationToken);
-
         SetStatus(
             $"Host gefunden: {host.Address} · Verbinde …",
             SoulBuddyNetworkState.Connecting);
 
         _client = new TcpClient();
-        await _client.ConnectAsync(
-            host.Address,
-            host.Port,
-            cancellationToken);
-
-        await CompleteHandshakeAsync(
-            _client,
-            isHost: false,
-            cancellationToken);
-
-        await KeepConnectionOpenAsync(_client, cancellationToken);
+        await _client.ConnectAsync(host.Address, host.Port, cancellationToken);
+        await CompleteHandshakeAsync(_client, isHost: false, cancellationToken);
+        await ReceiveMessagesAsync(cancellationToken);
     }
 
     private async Task<DiscoveredHost> DiscoverHostAsync(
         CancellationToken cancellationToken)
     {
-        using var udp = new UdpClient(0)
-        {
-            EnableBroadcast = true
-        };
-
+        using var udp = new UdpClient(0) { EnableBroadcast = true };
         var request = new DiscoveryMessage
         {
             Type = "discover",
@@ -294,7 +313,6 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             requestBytes,
             new IPEndPoint(IPAddress.Broadcast, DiscoveryPort),
             cancellationToken);
-
         await udp.SendAsync(
             requestBytes,
             new IPEndPoint(IPAddress.Loopback, DiscoveryPort),
@@ -307,7 +325,6 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         while (true)
         {
             UdpReceiveResult received;
-
             try
             {
                 received = await udp.ReceiveAsync(timeoutSource.Token);
@@ -316,16 +333,13 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
                 when (!cancellationToken.IsCancellationRequested)
             {
                 throw new InvalidOperationException(
-                    "Kein Host für diese Session gefunden. " +
-                    "Beide PCs müssen im selben Netzwerk sein und der Host muss zuerst gestartet werden.");
+                    "Kein Host für diese Session gefunden. Beide PCs müssen im selben Netzwerk sein.");
             }
 
             DiscoveryMessage? response;
-
             try
             {
-                response = JsonSerializer.Deserialize<DiscoveryMessage>(
-                    received.Buffer);
+                response = JsonSerializer.Deserialize<DiscoveryMessage>(received.Buffer);
             }
             catch (JsonException)
             {
@@ -336,17 +350,12 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
                 response.Type != "host" ||
                 response.ProtocolVersion != ProtocolVersion ||
                 response.TcpPort <= 0 ||
-                !string.Equals(
-                    response.SessionId,
-                    SessionId,
-                    StringComparison.OrdinalIgnoreCase))
+                !string.Equals(response.SessionId, SessionId, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            return new DiscoveredHost(
-                received.RemoteEndPoint.Address,
-                response.TcpPort);
+            return new DiscoveredHost(received.RemoteEndPoint.Address, response.TcpPort);
         }
     }
 
@@ -356,17 +365,15 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var stream = client.GetStream();
-
-        using var reader = new StreamReader(
+        _reader = new StreamReader(
             stream,
             Encoding.UTF8,
             detectEncodingFromByteOrderMarks: true,
             bufferSize: 1024,
             leaveOpen: true);
-
-        using var writer = new StreamWriter(
+        _writer = new StreamWriter(
             stream,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            new UTF8Encoding(false),
             bufferSize: 1024,
             leaveOpen: true)
         {
@@ -381,16 +388,15 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         };
 
         NetworkHello remoteHello;
-
         if (isHost)
         {
-            remoteHello = await ReadHelloAsync(reader, cancellationToken);
-            await writer.WriteLineAsync(JsonSerializer.Serialize(localHello));
+            remoteHello = await ReadHelloAsync(_reader, cancellationToken);
+            await _writer.WriteLineAsync(JsonSerializer.Serialize(localHello));
         }
         else
         {
-            await writer.WriteLineAsync(JsonSerializer.Serialize(localHello));
-            remoteHello = await ReadHelloAsync(reader, cancellationToken);
+            await _writer.WriteLineAsync(JsonSerializer.Serialize(localHello));
+            remoteHello = await ReadHelloAsync(_reader, cancellationToken);
         }
 
         if (remoteHello.ProtocolVersion != ProtocolVersion)
@@ -420,41 +426,38 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             SoulBuddyNetworkState.Connected);
     }
 
-    private static async Task<NetworkHello> ReadHelloAsync(
-        StreamReader reader,
-        CancellationToken cancellationToken)
+    private async Task ReceiveMessagesAsync(CancellationToken cancellationToken)
     {
-        var line = await reader.ReadLineAsync(cancellationToken);
-
-        if (string.IsNullOrWhiteSpace(line))
+        if (_reader is null)
         {
-            throw new InvalidOperationException(
-                "Der Mitspieler hat keine Verbindungsdaten gesendet.");
+            return;
         }
-
-        return JsonSerializer.Deserialize<NetworkHello>(line) ??
-               throw new InvalidOperationException(
-                   "Die Verbindungsdaten des Mitspielers sind ungültig.");
-    }
-
-    private async Task KeepConnectionOpenAsync(
-        TcpClient client,
-        CancellationToken cancellationToken)
-    {
-        var buffer = new byte[1];
-        var stream = client.GetStream();
 
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                var bytesRead = await stream.ReadAsync(
-                    buffer,
-                    cancellationToken);
-
-                if (bytesRead == 0)
+                var line = await _reader.ReadLineAsync(cancellationToken);
+                if (line is null)
                 {
                     break;
+                }
+
+                NetworkEnvelope? envelope;
+                try
+                {
+                    envelope = JsonSerializer.Deserialize<NetworkEnvelope>(line);
+                }
+                catch (JsonException)
+                {
+                    continue;
+                }
+
+                if (envelope?.Type == "player-snapshot" &&
+                    envelope.PlayerSnapshot is not null)
+                {
+                    LatestRemoteSnapshot = envelope.PlayerSnapshot;
+                    RaisePlayerSnapshotReceived(envelope.PlayerSnapshot);
                 }
             }
         }
@@ -469,10 +472,25 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         }
     }
 
+    private static async Task<NetworkHello> ReadHelloAsync(
+        StreamReader reader,
+        CancellationToken cancellationToken)
+    {
+        var line = await reader.ReadLineAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            throw new InvalidOperationException(
+                "Der Mitspieler hat keine Verbindungsdaten gesendet.");
+        }
+
+        return JsonSerializer.Deserialize<NetworkHello>(line) ??
+               throw new InvalidOperationException(
+                   "Die Verbindungsdaten des Mitspielers sind ungültig.");
+    }
+
     private static IReadOnlyList<string> GetLocalIpv4Addresses()
     {
         var addresses = new List<string>();
-
         foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (networkInterface.OperationalStatus != OperationalStatus.Up ||
@@ -481,9 +499,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
                 continue;
             }
 
-            foreach (var address in networkInterface
-                         .GetIPProperties()
-                         .UnicastAddresses)
+            foreach (var address in networkInterface.GetIPProperties().UnicastAddresses)
             {
                 if (address.Address.AddressFamily == AddressFamily.InterNetwork &&
                     !IPAddress.IsLoopback(address.Address))
@@ -496,30 +512,37 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         return addresses.Distinct().ToArray();
     }
 
-    private void SetStatus(
-        string statusText,
-        SoulBuddyNetworkState state)
+    private void SetStatus(string statusText, SoulBuddyNetworkState state)
     {
         lock (_sync)
         {
             StatusText = statusText;
             State = state;
         }
-
         RaiseStatusChanged();
     }
 
     private void RaiseStatusChanged()
     {
+        PostToSynchronizationContext(() =>
+            StatusChanged?.Invoke(this, EventArgs.Empty));
+    }
+
+    private void RaisePlayerSnapshotReceived(NetworkPlayerSnapshot snapshot)
+    {
+        PostToSynchronizationContext(() =>
+            PlayerSnapshotReceived?.Invoke(this, snapshot));
+    }
+
+    private void PostToSynchronizationContext(Action action)
+    {
         if (_synchronizationContext is null)
         {
-            StatusChanged?.Invoke(this, EventArgs.Empty);
+            action();
             return;
         }
 
-        _synchronizationContext.Post(
-            _ => StatusChanged?.Invoke(this, EventArgs.Empty),
-            null);
+        _synchronizationContext.Post(_ => action(), null);
     }
 
     private void CloseDiscoveryClient()
@@ -540,14 +563,15 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         }
 
         CloseDiscoveryClient();
-
         _listener?.Stop();
         _listener = null;
-
+        _reader?.Dispose();
+        _reader = null;
+        _writer?.Dispose();
+        _writer = null;
         _client?.Close();
         _client?.Dispose();
         _client = null;
-
         _cancellationSource?.Dispose();
         _cancellationSource = null;
         _networkTask = null;
@@ -568,6 +592,12 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             {
             }
         }
+
+        if (ReferenceEquals(Current, this))
+        {
+            Current = null;
+        }
+        _sendLock.Dispose();
     }
 
     private sealed class NetworkHello
@@ -584,6 +614,12 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         public string SessionId { get; init; } = string.Empty;
         public string PlayerName { get; init; } = string.Empty;
         public int TcpPort { get; init; }
+    }
+
+    private sealed class NetworkEnvelope
+    {
+        public string Type { get; init; } = string.Empty;
+        public NetworkPlayerSnapshot? PlayerSnapshot { get; init; }
     }
 
     private sealed record DiscoveredHost(IPAddress Address, int Port);
