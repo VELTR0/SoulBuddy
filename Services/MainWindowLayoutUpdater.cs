@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -9,23 +10,26 @@ namespace SoulBuddy.Services;
 
 internal static class MainWindowLayoutUpdater
 {
-    private static DispatcherTimer? _timer;
+    private static readonly HashSet<Panel> AttachedStoredPanels = [];
+    private static readonly HashSet<Window> AttachedWindows = [];
+    private static DispatcherTimer? _discoveryTimer;
 
     [ModuleInitializer]
     internal static void Initialize()
     {
         Dispatcher.UIThread.Post(() =>
         {
-            _timer = new DispatcherTimer
+            _discoveryTimer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromMilliseconds(400)
+                Interval = TimeSpan.FromMilliseconds(500)
             };
-            _timer.Tick += (_, _) => UpdateOpenWindows();
-            _timer.Start();
+            _discoveryTimer.Tick += (_, _) => DiscoverWindows();
+            _discoveryTimer.Start();
+            DiscoverWindows();
         });
     }
 
-    private static void UpdateOpenWindows()
+    private static void DiscoverWindows()
     {
         if (Application.Current?.ApplicationLifetime is not
             IClassicDesktopStyleApplicationLifetime desktop)
@@ -36,7 +40,92 @@ internal static class MainWindowLayoutUpdater
         foreach (var window in desktop.Windows)
         {
             ApplyColumnWidths(window);
-            HideStoredPokemonHp(window);
+            AttachStoredPanel(window);
+
+            if (AttachedWindows.Add(window))
+            {
+                window.Closed += (_, _) => DetachWindow(window);
+            }
+        }
+    }
+
+    private static void AttachStoredPanel(Window window)
+    {
+        var storedSection = FindSection(window, "Gespeicherte Pokémon");
+        var scrollViewer = storedSection?.Children
+            .OfType<ScrollViewer>()
+            .FirstOrDefault(viewer => Grid.GetRow(viewer) == 1);
+
+        if (scrollViewer?.Content is not Panel storedPanel ||
+            !AttachedStoredPanels.Add(storedPanel))
+        {
+            return;
+        }
+
+        storedPanel.Children.CollectionChanged += OnStoredChildrenChanged;
+        Dispatcher.UIThread.Post(() => RemoveStoredHpControls(storedPanel));
+    }
+
+    private static void OnStoredChildrenChanged(
+        object? sender,
+        NotifyCollectionChangedEventArgs eventArgs)
+    {
+        if (sender is not Avalonia.Controls.Controls children)
+        {
+            return;
+        }
+
+        var panel = AttachedStoredPanels
+            .FirstOrDefault(candidate => ReferenceEquals(candidate.Children, children));
+
+        if (panel is not null)
+        {
+            Dispatcher.UIThread.Post(() => RemoveStoredHpControls(panel));
+        }
+    }
+
+    private static void RemoveStoredHpControls(Panel storedPanel)
+    {
+        var progressBars = storedPanel
+            .GetVisualDescendants()
+            .OfType<ProgressBar>()
+            .ToArray();
+
+        foreach (var progressBar in progressBars)
+        {
+            var hpGrid = progressBar
+                .GetVisualAncestors()
+                .OfType<Grid>()
+                .FirstOrDefault(grid => grid.Children.Contains(progressBar));
+
+            if (hpGrid is null)
+            {
+                continue;
+            }
+
+            var hpText = hpGrid.Children
+                .OfType<TextBlock>()
+                .FirstOrDefault(text => IsHpText(text.Text));
+            var levelText = hpGrid.Children
+                .OfType<TextBlock>()
+                .FirstOrDefault(text =>
+                    text.Text?.StartsWith("Level ", StringComparison.Ordinal) == true);
+
+            hpGrid.Children.Remove(progressBar);
+            if (hpText is not null)
+            {
+                hpGrid.Children.Remove(hpText);
+            }
+
+            hpGrid.ColumnDefinitions = new ColumnDefinitions("*");
+            hpGrid.RowDefinitions = new RowDefinitions("Auto");
+            hpGrid.ColumnSpacing = 0;
+
+            if (levelText is not null)
+            {
+                Grid.SetColumn(levelText, 0);
+                Grid.SetRow(levelText, 0);
+            }
         }
     }
 
@@ -53,44 +142,25 @@ internal static class MainWindowLayoutUpdater
             .OfType<Grid>()
             .FirstOrDefault(grid => grid.ColumnDefinitions.Count == 3);
 
-        if (contentGrid is null)
+        if (contentGrid is not null)
         {
-            return;
+            contentGrid.ColumnDefinitions =
+                new ColumnDefinitions("2.15*,0.62*,1.1*");
         }
-
-        // Die gespeicherte Liste erhält ungefähr die Hälfte ihrer bisherigen
-        // Breite. Der frei werdende Platz geht vollständig an das Team.
-        contentGrid.ColumnDefinitions =
-            new ColumnDefinitions("2.15*,0.62*,1.1*");
     }
 
-    private static void HideStoredPokemonHp(Window window)
+    private static void DetachWindow(Window window)
     {
-        var storedSection = FindSection(window, "Gespeicherte Pokémon");
-        var scrollViewer = storedSection?.Children
-            .OfType<ScrollViewer>()
-            .FirstOrDefault(viewer => Grid.GetRow(viewer) == 1);
+        AttachedWindows.Remove(window);
 
-        if (scrollViewer is null)
-        {
-            return;
-        }
+        var panels = AttachedStoredPanels
+            .Where(panel => panel.GetVisualAncestors().Contains(window))
+            .ToArray();
 
-        foreach (var progressBar in scrollViewer
-                     .GetVisualDescendants()
-                     .OfType<ProgressBar>())
+        foreach (var panel in panels)
         {
-            progressBar.IsVisible = false;
-        }
-
-        foreach (var text in scrollViewer
-                     .GetVisualDescendants()
-                     .OfType<TextBlock>())
-        {
-            if (IsHpText(text.Text))
-            {
-                text.IsVisible = false;
-            }
+            panel.Children.CollectionChanged -= OnStoredChildrenChanged;
+            AttachedStoredPanels.Remove(panel);
         }
     }
 
