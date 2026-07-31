@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace SoulBuddy.Models;
 
 public sealed class PlayerLiveState
@@ -10,8 +12,8 @@ public sealed class PlayerLiveState
     public string? TrainerName { get; init; }
     public LivePokemonState? Opponent { get; init; }
     public LivePokemonState? ActivePokemon { get; init; }
-    public IReadOnlyDictionary<string, long> Diagnostics { get; init; } =
-        new Dictionary<string, long>();
+    public IReadOnlyDictionary<string, JsonElement> Diagnostics { get; init; } =
+        new Dictionary<string, JsonElement>();
 }
 
 public sealed class LivePokemonState
