@@ -10,7 +10,8 @@ namespace SoulBuddy.Services;
 
 internal static class MainWindowLayoutUpdater
 {
-    private static readonly HashSet<Panel> AttachedStoredPanels = [];
+    private static readonly Dictionary<Panel, NotifyCollectionChangedEventHandler>
+        StoredPanelHandlers = [];
     private static readonly HashSet<Window> AttachedWindows = [];
     private static DispatcherTimer? _discoveryTimer;
 
@@ -57,31 +58,17 @@ internal static class MainWindowLayoutUpdater
             .FirstOrDefault(viewer => Grid.GetRow(viewer) == 1);
 
         if (scrollViewer?.Content is not Panel storedPanel ||
-            !AttachedStoredPanels.Add(storedPanel))
+            StoredPanelHandlers.ContainsKey(storedPanel))
         {
             return;
         }
 
-        storedPanel.Children.CollectionChanged += OnStoredChildrenChanged;
+        NotifyCollectionChangedEventHandler handler = (_, _) =>
+            Dispatcher.UIThread.Post(() => RemoveStoredHpControls(storedPanel));
+
+        StoredPanelHandlers.Add(storedPanel, handler);
+        storedPanel.Children.CollectionChanged += handler;
         Dispatcher.UIThread.Post(() => RemoveStoredHpControls(storedPanel));
-    }
-
-    private static void OnStoredChildrenChanged(
-        object? sender,
-        NotifyCollectionChangedEventArgs eventArgs)
-    {
-        if (sender is not Avalonia.Controls.Controls children)
-        {
-            return;
-        }
-
-        var panel = AttachedStoredPanels
-            .FirstOrDefault(candidate => ReferenceEquals(candidate.Children, children));
-
-        if (panel is not null)
-        {
-            Dispatcher.UIThread.Post(() => RemoveStoredHpControls(panel));
-        }
     }
 
     private static void RemoveStoredHpControls(Panel storedPanel)
@@ -153,14 +140,15 @@ internal static class MainWindowLayoutUpdater
     {
         AttachedWindows.Remove(window);
 
-        var panels = AttachedStoredPanels
+        var panels = StoredPanelHandlers.Keys
             .Where(panel => panel.GetVisualAncestors().Contains(window))
             .ToArray();
 
         foreach (var panel in panels)
         {
-            panel.Children.CollectionChanged -= OnStoredChildrenChanged;
-            AttachedStoredPanels.Remove(panel);
+            var handler = StoredPanelHandlers[panel];
+            panel.Children.CollectionChanged -= handler;
+            StoredPanelHandlers.Remove(panel);
         }
     }
 
