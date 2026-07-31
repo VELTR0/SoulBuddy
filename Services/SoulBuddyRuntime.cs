@@ -52,16 +52,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
     public static async Task<SoulBuddyRuntime> CreateAsync(
         CancellationToken cancellationToken = default)
     {
-        var workingDirectory = Directory.GetCurrentDirectory();
-        var executableDirectory = AppContext.BaseDirectory;
-
-        var workingConfigPath = Path.Combine(
-            workingDirectory,
-            "appsettings.json");
-
-        var configDirectory = File.Exists(workingConfigPath)
-            ? workingDirectory
-            : executableDirectory;
+        var configDirectory = FindConfigDirectory();
 
         var defaultConfigPath = Path.Combine(
             configDirectory,
@@ -107,7 +98,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         }
 
         var partyJsonPath = Path.IsPathRooted(config.PartyJsonPath)
-            ? config.PartyJsonPath
+            ? Path.GetFullPath(config.PartyJsonPath)
             : Path.GetFullPath(
                 Path.Combine(
                     configDirectory,
@@ -164,6 +155,87 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             knownPokemonStore,
             syncService,
             collectorEventSource);
+    }
+
+    private static string FindConfigDirectory()
+    {
+        var searchRoots = new[]
+        {
+            Directory.GetCurrentDirectory(),
+            AppContext.BaseDirectory
+        };
+
+        foreach (var searchRoot in searchRoots.Distinct(
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            var projectDirectory = FindProjectDirectory(searchRoot);
+
+            if (projectDirectory is not null)
+            {
+                return projectDirectory;
+            }
+        }
+
+        foreach (var searchRoot in searchRoots.Distinct(
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            var configDirectory = FindDirectoryContainingFile(
+                searchRoot,
+                "appsettings.json");
+
+            if (configDirectory is not null)
+            {
+                return configDirectory;
+            }
+        }
+
+        throw new FileNotFoundException(
+            "Der SoulBuddy-Projektordner mit appsettings.json wurde nicht gefunden.");
+    }
+
+    private static string? FindProjectDirectory(string startPath)
+    {
+        var directory = new DirectoryInfo(Path.GetFullPath(startPath));
+
+        while (directory is not null)
+        {
+            var configPath = Path.Combine(
+                directory.FullName,
+                "appsettings.json");
+
+            var collectorPath = Path.Combine(
+                directory.FullName,
+                "collectors",
+                "desmume-gen4");
+
+            if (File.Exists(configPath) && Directory.Exists(collectorPath))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
+    }
+
+    private static string? FindDirectoryContainingFile(
+        string startPath,
+        string fileName)
+    {
+        var directory = new DirectoryInfo(Path.GetFullPath(startPath));
+
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, fileName)))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
     }
 
     public void Start()
