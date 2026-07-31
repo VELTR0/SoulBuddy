@@ -228,10 +228,12 @@ function Pokemon:update_hp(currentHp, maxHp)
 end
 
 function Pokemon:__call(init)
-    local has_values = init ~= nil
+    if init ~= nil and init.is_empty == nil then
+        init.is_empty = false
+    end
+
     init = init or {}
     init = object_assign(_defaultPokemonValues, init)
-    if has_values and init.is_empty == nil then init.is_empty = false end
     setmetatable(init, self)
     self.__index = self
     return init
