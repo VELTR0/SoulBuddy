@@ -9,6 +9,7 @@ namespace SoulBuddy.ViewModels;
 public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 {
     private readonly DispatcherTimer _refreshTimer;
+    private readonly LocationMapper _locationMapper = new();
     private SoulBuddyRuntime? _runtime;
     private bool _refreshInProgress;
     private string _statusText = "SoulBuddy wird gestartet …";
@@ -109,15 +110,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
         try
         {
-            var party = await _runtime.LivePartySource.ReadPartyAsync(CancellationToken.None);
-            var stored = await _runtime.KnownPokemonStore.GetAllAsync(CancellationToken.None);
+            var party = await _runtime.LivePartySource.ReadPartyAsync(
+                CancellationToken.None);
+            var stored = await _runtime.KnownPokemonStore.GetAllAsync(
+                CancellationToken.None);
 
             ReplaceItems(Party, CreatePartyCards(party));
             ReplaceItems(StoredPokemon, CreateStoredCards(stored));
 
             PartyCountText = $"{Party.Count} / 6";
             PokemonCountText = $"{StoredPokemon.Count} Pokémon";
-            StatusText = $"Collector aktiv · Letzte Aktualisierung {DateTime.Now:HH:mm:ss}";
+            StatusText =
+                $"Collector aktiv · Letzte Aktualisierung {DateTime.Now:HH:mm:ss}";
         }
         catch (Exception ex)
         {
@@ -129,7 +133,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         }
     }
 
-    private static IEnumerable<PokemonCardViewModel> CreatePartyCards(
+    private IEnumerable<PokemonCardViewModel> CreatePartyCards(
         IReadOnlyList<PartySlot> party)
     {
         return party
@@ -145,6 +149,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                     ? "Geschlechtslos"
                     : pokemon.IsFemale ? "Weiblich" : "Männlich";
                 var ball = GetPokeballName(pokemon.Pokeball);
+                var location = GetLocationDisplayName(pokemon.LocationMet);
 
                 return new PokemonCardViewModel
                 {
@@ -159,7 +164,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                     Gender = gender,
                     Pokeball = ball,
                     IsShiny = pokemon.IsShiny,
-                    Subtitle = $"Fangort-ID {pokemon.LocationMet}",
+                    Subtitle = location,
                     DetailsTitle = displayName,
                     DetailsText =
                         $"Spezies: {pokemon.SpeciesName} (#{pokemon.Species})\n" +
@@ -171,8 +176,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                         $"Pokéball: {ball}\n" +
                         $"Shiny: {(pokemon.IsShiny ? "Ja" : "Nein")}\n" +
                         $"Fanglevel: {pokemon.LevelMet}\n" +
-                        $"Fangort-ID: {pokemon.LocationMet}\n\n" +
+                        $"Fangort: {location}\n\n" +
                         "Technische Daten\n" +
+                        $"Fangort-ID: {pokemon.LocationMet}\n" +
                         $"PID: {pokemon.Pid}\n" +
                         $"Trainer-ID: {pokemon.OriginalTrainerId}\n" +
                         $"Secret-ID: {pokemon.OriginalTrainerSecretId}"
@@ -211,11 +217,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                         $"Fanglevel: {entry.LevelMet}\n" +
                         $"Soullocke: {(entry.SoullockeSynced ? "synchronisiert" : "ausstehend")}\n\n" +
                         "Technische Daten\n" +
+                        $"Fangort-ID: {entry.LocationId}\n" +
                         $"PID: {entry.Pid}\n" +
                         $"Erstmals erkannt: {entry.FirstSeenAt.LocalDateTime:g}\n" +
                         $"Zuletzt gesehen: {entry.LastSeenAt.LocalDateTime:g}"
                 };
             });
+    }
+
+    private string GetLocationDisplayName(int locationId)
+    {
+        return _locationMapper.GetLocationName(locationId)
+            ?? $"Unbekannter Fangort ({locationId})";
     }
 
     private static string ValueOrUnknown(string value) =>
