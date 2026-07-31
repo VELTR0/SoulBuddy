@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using SoulBuddy.Models;
@@ -197,11 +198,11 @@ public sealed class SessionSetupWindow : Window
         _statusText.Foreground = Brush(isError ? "#FCA5A5" : "#A7F3D0");
     }
 
-    private static TextBox CreateTextBox(string watermark)
+    private static TextBox CreateTextBox(string placeholderText)
     {
         return new TextBox
         {
-            Watermark = watermark,
+            PlaceholderText = placeholderText,
             FontSize = 15,
             Padding = new Thickness(13, 11),
             Background = Brush("#0F1829"),
