@@ -219,7 +219,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                     {
                         SpeciesId = liveState.ActivePokemon.SpeciesId,
                         SpeciesName = liveState.ActivePokemon.SpeciesName,
-                        Nickname = liveState.ActivePokemon.Nickname,
+                        Nickname = liveState.ActivePokemon.Nickname ?? string.Empty,
                         Level = liveState.ActivePokemon.Level,
                         CurrentHp = liveState.ActivePokemon.CurrentHp,
                         MaxHp = liveState.ActivePokemon.MaxHp
@@ -344,7 +344,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                 {
                     SpeciesId = fallback.Species,
                     SpeciesName = fallback.SpeciesName,
-                    Nickname = fallback.Nickname,
+                    Nickname = fallback.Nickname ?? string.Empty,
                     Level = fallback.Level,
                     CurrentHp = fallback.Hp.Current,
                     MaxHp = fallback.Hp.Max
