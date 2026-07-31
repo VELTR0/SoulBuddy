@@ -4,6 +4,9 @@ namespace SoulBuddy.Models;
 
 public sealed class PartySlot
 {
+    [JsonPropertyName("box")]
+    public int? Box { get; init; }
+
     [JsonPropertyName("slotId")]
     public int SlotId { get; init; }
 
