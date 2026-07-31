@@ -10,18 +10,19 @@ namespace SoulBuddy.Services;
 
 internal static class SoulLinkCardUpdater
 {
-    private static readonly DispatcherTimer Timer = new()
-    {
-        Interval = TimeSpan.FromMilliseconds(350)
-    };
+    private static DispatcherTimer? _timer;
 
     [ModuleInitializer]
     internal static void Initialize()
     {
         Dispatcher.UIThread.Post(() =>
         {
-            Timer.Tick += (_, _) => UpdateVisiblePartyCards();
-            Timer.Start();
+            _timer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(350)
+            };
+            _timer.Tick += (_, _) => UpdateVisiblePartyCards();
+            _timer.Start();
         });
     }
 
@@ -54,15 +55,14 @@ internal static class SoulLinkCardUpdater
         IReadOnlyList<NetworkPokemonSnapshot> remoteParty)
     {
         var availablePartners = remoteParty
-            .Select((pokemon, index) => new PartnerCandidate(pokemon, index))
+            .Select(pokemon => new PartnerCandidate(pokemon))
             .ToList();
 
         var linkTexts = window
             .GetVisualDescendants()
             .OfType<TextBlock>()
             .Where(text => text.Text is not null &&
-                           (text.Text.StartsWith("🔗", StringComparison.Ordinal) ||
-                            text.Text.StartsWith("Partner:", StringComparison.Ordinal)))
+                           text.Text.StartsWith("🔗", StringComparison.Ordinal))
             .ToArray();
 
         foreach (var linkText in linkTexts)
@@ -77,12 +77,9 @@ internal static class SoulLinkCardUpdater
                 continue;
             }
 
-            var cardTexts = card
+            var locationText = card
                 .GetVisualDescendants()
                 .OfType<TextBlock>()
-                .ToArray();
-
-            var locationText = cardTexts
                 .Select(text => text.Text)
                 .FirstOrDefault(text =>
                     !string.IsNullOrWhiteSpace(text) &&
@@ -95,19 +92,20 @@ internal static class SoulLinkCardUpdater
 
             var localLocation = locationText[2..].Trim();
             var localKey = NormalizeLocation(localLocation);
-
             var match = availablePartners.FirstOrDefault(candidate =>
                 NormalizeLocation(candidate.Pokemon.Location) == localKey);
 
             if (match is null)
             {
                 linkText.Text = "🔗 noch nicht verknüpft";
+                linkText.Foreground = Color("#FBBF24");
                 continue;
             }
 
             availablePartners.Remove(match);
-            linkText.Text = $"🔗 {match.Pokemon.DisplayName} · {match.Pokemon.SpeciesName}";
-            linkText.Foreground = MainColor("#86EFAC");
+            linkText.Text =
+                $"🔗 {match.Pokemon.DisplayName} · {match.Pokemon.SpeciesName}";
+            linkText.Foreground = Color("#86EFAC");
         }
     }
 
@@ -130,10 +128,8 @@ internal static class SoulLinkCardUpdater
         };
     }
 
-    private static Avalonia.Media.SolidColorBrush MainColor(string color) =>
-        new(Avalonia.Media.Color.Parse(color));
+    private static Avalonia.Media.SolidColorBrush Color(string value) =>
+        new(Avalonia.Media.Color.Parse(value));
 
-    private sealed record PartnerCandidate(
-        NetworkPokemonSnapshot Pokemon,
-        int Index);
+    private sealed record PartnerCandidate(NetworkPokemonSnapshot Pokemon);
 }
