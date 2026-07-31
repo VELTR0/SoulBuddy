@@ -29,8 +29,8 @@ public sealed class SessionSetupWindow : Window
         MinHeight = 600;
         Background = Brush("#0B1220");
 
-        _sessionIdBox = CreateTextBox("z. B. pascal-farah-hgss");
-        _sessionNameBox = CreateTextBox("z. B. HeartGold SoulLink");
+        _sessionIdBox = CreateTextBox("z. B. meine-soullink-session");
+        _sessionNameBox = CreateTextBox("z. B. Unsere SoulLink-Challenge");
         _playerNameBox = CreateTextBox("Dein Spielername");
         _statusText = Text("", 13, FontWeight.Medium, "#CBD5E1");
         _statusText.TextWrapping = TextWrapping.Wrap;
@@ -184,10 +184,7 @@ public sealed class SessionSetupWindow : Window
 
     private void OpenMainWindow(SessionContext context)
     {
-        var mainWindow = new MainWindow
-        {
-            Title = $"SoulBuddy · {context.Session.Name} · {context.LocalPlayer.DisplayName}"
-        };
+        var mainWindow = new MainWindow(context);
         mainWindow.Show();
         Close();
     }
