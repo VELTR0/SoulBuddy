@@ -24,14 +24,10 @@ public sealed class JsonLineCollectorEventSource
         _partySource = partySource;
     }
 
-    public async Task RunAsync(
-        CancellationToken cancellationToken)
+    public async Task RunAsync(CancellationToken cancellationToken)
     {
-        Console.WriteLine(
-            $"Collector-Ereignisse: {_eventFilePath}");
-
-        Console.WriteLine(
-            "Warte auf Nachrichten vom Emulator.");
+        Console.WriteLine($"Collector-Ereignisse: {_eventFilePath}");
+        Console.WriteLine("Warte auf Nachrichten vom Emulator.");
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -59,9 +55,7 @@ public sealed class JsonLineCollectorEventSource
             catch (UnauthorizedAccessException ex)
             {
                 Console.WriteLine(
-                    $"Zugriff auf die Event-Datei nicht möglich: " +
-                    $"{ex.Message}");
-
+                    $"Zugriff auf die Event-Datei nicht möglich: {ex.Message}");
                 await Task.Delay(1000, cancellationToken);
             }
         }
@@ -93,7 +87,6 @@ public sealed class JsonLineCollectorEventSource
         }
 
         stream.Seek(_readPosition, SeekOrigin.Begin);
-
         using var reader = new StreamReader(stream);
 
         while (!cancellationToken.IsCancellationRequested)
@@ -141,26 +134,18 @@ public sealed class JsonLineCollectorEventSource
         }
         catch (JsonException ex)
         {
-            Console.WriteLine(
-                $"Ungültige Collector-Nachricht: {ex.Message}");
-
-            Console.WriteLine(
-                $"  Inhalt: {line}");
-
+            Console.WriteLine($"Ungültige Collector-Nachricht: {ex.Message}");
+            Console.WriteLine($"  Inhalt: {line}");
             return;
         }
 
         if (collectorEvent is null)
         {
-            Console.WriteLine(
-                "Leere Collector-Nachricht empfangen.");
-
+            Console.WriteLine("Leere Collector-Nachricht empfangen.");
             return;
         }
 
-        await HandleEventAsync(
-            collectorEvent,
-            cancellationToken);
+        await HandleEventAsync(collectorEvent, cancellationToken);
     }
 
     private async Task HandleEventAsync(
@@ -174,17 +159,23 @@ public sealed class JsonLineCollectorEventSource
                 break;
 
             case "party-update":
-                await HandlePartyUpdateAsync(
-                    collectorEvent,
+                await _partySource.ApplyUpdateAsync(
+                    collectorEvent.Slots,
                     cancellationToken);
+                LogUpdate("Party", collectorEvent);
+                break;
+
+            case "box-update":
+                await _partySource.ApplyBoxUpdateAsync(
+                    collectorEvent.Slots,
+                    cancellationToken);
+                LogUpdate("Box", collectorEvent);
                 break;
 
             default:
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] " +
-                    $"Collector-Ereignis empfangen: " +
-                    $"{collectorEvent.Type}");
-
+                    $"Collector-Ereignis empfangen: {collectorEvent.Type}");
                 break;
         }
     }
@@ -193,27 +184,20 @@ public sealed class JsonLineCollectorEventSource
         CollectorEvent collectorEvent)
     {
         Console.WriteLine(
-            $"[{DateTime.Now:HH:mm:ss}] " +
-            $"Collector erkannt. " +
+            $"[{DateTime.Now:HH:mm:ss}] Collector erkannt. " +
             $"Spiel: {collectorEvent.Game ?? "unbekannt"}, " +
             $"Protokoll: {collectorEvent.ProtocolVersion}");
     }
 
-    private async Task HandlePartyUpdateAsync(
-        CollectorEvent collectorEvent,
-        CancellationToken cancellationToken)
+    private static void LogUpdate(
+        string updateType,
+        CollectorEvent collectorEvent)
     {
-        await _partySource.ApplyUpdateAsync(
-            collectorEvent.Slots,
-            cancellationToken);
-
         var generationText =
-            collectorEvent.Generation?.ToString()
-            ?? "unbekannt";
+            collectorEvent.Generation?.ToString() ?? "unbekannt";
 
         Console.WriteLine(
-            $"[{DateTime.Now:HH:mm:ss}] " +
-            $"Party-Update übernommen. " +
+            $"[{DateTime.Now:HH:mm:ss}] {updateType}-Update übernommen. " +
             $"Spiel: {collectorEvent.Game ?? "unbekannt"}, " +
             $"Generation: {generationText}, " +
             $"geänderte Slots: {collectorEvent.Slots.Count}");
