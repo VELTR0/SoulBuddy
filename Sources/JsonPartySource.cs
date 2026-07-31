@@ -55,4 +55,10 @@ public sealed class JsonPartySource : IPartySource
 
         return [];
     }
+
+    public Task<IReadOnlyList<PartySlot>> ReadAllPokemonAsync(
+        CancellationToken cancellationToken)
+    {
+        return ReadPartyAsync(cancellationToken);
+    }
 }
