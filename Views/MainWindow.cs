@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Media;
+using SoulBuddy.Services;
 using SoulBuddy.ViewModels;
 
 namespace SoulBuddy.Views;
@@ -11,6 +12,7 @@ namespace SoulBuddy.Views;
 public sealed class MainWindow : Window
 {
     private readonly MainWindowViewModel _viewModel;
+    private readonly PokemonVisualService _visualService = new();
     private readonly StackPanel _partyPanel;
     private readonly StackPanel _pokemonPanel;
 
@@ -48,7 +50,7 @@ public sealed class MainWindow : Window
 
         var contentGrid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("340,*,380"),
+            ColumnDefinitions = new ColumnDefinitions("390,*,380"),
             Margin = new Thickness(24, 20),
             ColumnSpacing = 18
         };
@@ -117,11 +119,7 @@ public sealed class MainWindow : Window
         };
 
         var titlePanel = new StackPanel { Spacing = 3 };
-        titlePanel.Children.Add(Text(
-            "SoulBuddy",
-            31,
-            FontWeight.Bold,
-            "#F8FAFC"));
+        titlePanel.Children.Add(Text("SoulBuddy", 31, FontWeight.Bold, "#F8FAFC"));
         titlePanel.Children.Add(Text(
             "Dein lokaler Nuzlocke- und SoulLink-Begleiter",
             14,
@@ -135,11 +133,7 @@ public sealed class MainWindow : Window
             CornerRadius = new CornerRadius(18),
             Padding = new Thickness(15, 8),
             VerticalAlignment = VerticalAlignment.Center,
-            Child = Text(
-                "PHASE 1 · MVVM",
-                12,
-                FontWeight.Bold,
-                "#93C5FD")
+            Child = Text("PHASE 2 · VISUALS", 12, FontWeight.Bold, "#93C5FD")
         };
         Grid.SetColumn(badge, 1);
         grid.Children.Add(badge);
@@ -164,11 +158,7 @@ public sealed class MainWindow : Window
             Margin = new Thickness(0, 0, 0, 16)
         };
 
-        header.Children.Add(Text(
-            title,
-            20,
-            FontWeight.Bold,
-            "#F8FAFC"));
+        header.Children.Add(Text(title, 20, FontWeight.Bold, "#F8FAFC"));
 
         var count = Text("", 13, FontWeight.Medium, "#93C5FD");
         count.Bind(TextBlock.TextProperty, new Binding(countBinding));
@@ -194,11 +184,7 @@ public sealed class MainWindow : Window
             RowDefinitions = new RowDefinitions("Auto,Auto,*")
         };
 
-        grid.Children.Add(Text(
-            "Pokémon-Details",
-            20,
-            FontWeight.Bold,
-            "#F8FAFC"));
+        grid.Children.Add(Text("Pokémon-Details", 20, FontWeight.Bold, "#F8FAFC"));
 
         var separator = new Border
         {
@@ -257,8 +243,7 @@ public sealed class MainWindow : Window
 
         if (_viewModel.Party.Count == 0)
         {
-            _partyPanel.Children.Add(CreateEmptyState(
-                "Warte auf Teamdaten vom Emulator …"));
+            _partyPanel.Children.Add(CreateEmptyState("Warte auf Teamdaten vom Emulator …"));
             return;
         }
 
@@ -274,8 +259,7 @@ public sealed class MainWindow : Window
 
         if (_viewModel.StoredPokemon.Count == 0)
         {
-            _pokemonPanel.Children.Add(CreateEmptyState(
-                "Noch keine Pokémon lokal gespeichert."));
+            _pokemonPanel.Children.Add(CreateEmptyState("Noch keine Pokémon lokal gespeichert."));
             return;
         }
 
@@ -287,43 +271,70 @@ public sealed class MainWindow : Window
 
     private Control CreatePokemonCard(PokemonCardViewModel pokemon)
     {
-        var panel = new StackPanel { Spacing = 8 };
+        var sprite = new Image
+        {
+            Width = 82,
+            Height = 82,
+            Stretch = Stretch.Uniform,
+            VerticalAlignment = VerticalAlignment.Center
+        };
 
-        panel.Children.Add(Text(
-            pokemon.NameLine,
-            16,
-            FontWeight.SemiBold,
-            "#F8FAFC"));
+        var spriteFrame = new Border
+        {
+            Width = 94,
+            Height = 94,
+            CornerRadius = new CornerRadius(14),
+            Background = Brush("#18243A"),
+            BorderBrush = Brush("#334866"),
+            BorderThickness = new Thickness(1),
+            Child = sprite
+        };
+
+        var content = new StackPanel { Spacing = 7 };
+
+        var nameGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto")
+        };
+        nameGrid.Children.Add(Text(pokemon.NameLine, 16, FontWeight.SemiBold, "#F8FAFC"));
+
+        var gender = Text(pokemon.GenderSymbol, 18, FontWeight.Bold,
+            pokemon.Gender == "Weiblich" ? "#F9A8D4" : "#7DD3FC");
+        gender.Margin = new Thickness(8, 0, 0, 0);
+        Grid.SetColumn(gender, 1);
+        nameGrid.Children.Add(gender);
+
+        var shiny = Text(pokemon.ShinySymbol, 18, FontWeight.Bold, "#FDE047");
+        shiny.Margin = new Thickness(7, 0, 0, 0);
+        Grid.SetColumn(shiny, 2);
+        nameGrid.Children.Add(shiny);
+        content.Children.Add(nameGrid);
+
+        var typePanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            MinHeight = 23
+        };
+        content.Children.Add(typePanel);
 
         var infoGrid = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto")
         };
-        infoGrid.Children.Add(Text(
-            pokemon.LevelText,
-            12,
-            FontWeight.Medium,
-            "#93C5FD"));
+        infoGrid.Children.Add(Text(pokemon.LevelText, 12, FontWeight.Medium, "#93C5FD"));
 
-        var subtitle = Text(
-            pokemon.Subtitle,
-            12,
-            FontWeight.Normal,
-            "#94A3B8");
+        var subtitle = Text(pokemon.Subtitle, 12, FontWeight.Normal, "#94A3B8");
         subtitle.Margin = new Thickness(12, 0);
         Grid.SetColumn(subtitle, 1);
         infoGrid.Children.Add(subtitle);
 
-        var hpText = Text(
-            pokemon.HpText,
-            12,
-            FontWeight.Medium,
-            "#CBD5E1");
+        var hpText = Text(pokemon.HpText, 12, FontWeight.Medium, "#CBD5E1");
         Grid.SetColumn(hpText, 2);
         infoGrid.Children.Add(hpText);
-        panel.Children.Add(infoGrid);
+        content.Children.Add(infoGrid);
 
-        panel.Children.Add(new ProgressBar
+        content.Children.Add(new ProgressBar
         {
             Minimum = 0,
             Maximum = 100,
@@ -334,19 +345,95 @@ public sealed class MainWindow : Window
             Foreground = Brush(GetHpColor(pokemon.HpPercentage))
         });
 
+        if (!string.IsNullOrWhiteSpace(pokemon.TraitLine))
+        {
+            var traits = Text(pokemon.TraitLine, 11, FontWeight.Normal, "#A8B5C7");
+            traits.TextWrapping = TextWrapping.Wrap;
+            content.Children.Add(traits);
+        }
+
+        var cardGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+            ColumnSpacing = 14
+        };
+        cardGrid.Children.Add(spriteFrame);
+        Grid.SetColumn(content, 1);
+        cardGrid.Children.Add(content);
+
         var button = new Button
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            Padding = new Thickness(14, 13),
+            Padding = new Thickness(12),
             Background = Brush("#0F1829"),
             BorderBrush = Brush("#344763"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(12),
-            Content = panel
+            Content = cardGrid
         };
         button.Click += (_, _) => _viewModel.SelectPokemon(pokemon);
+
+        _ = LoadVisualsAsync(pokemon, sprite, typePanel);
         return button;
+    }
+
+    private async Task LoadVisualsAsync(
+        PokemonCardViewModel pokemon,
+        Image sprite,
+        StackPanel typePanel)
+    {
+        var visualData = await _visualService.GetAsync(
+            pokemon.SpeciesId,
+            pokemon.IsShiny);
+
+        if (visualData.Sprite is not null)
+        {
+            sprite.Source = visualData.Sprite;
+        }
+
+        typePanel.Children.Clear();
+        foreach (var type in visualData.Types)
+        {
+            typePanel.Children.Add(CreateTypeBadge(type));
+        }
+    }
+
+    private static Border CreateTypeBadge(string type)
+    {
+        return new Border
+        {
+            Background = Brush(GetTypeColor(type)),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(9, 3),
+            Child = Text(type, 10, FontWeight.Bold, "#FFFFFF")
+        };
+    }
+
+    private static string GetTypeColor(string type)
+    {
+        return type switch
+        {
+            "Normal" => "#7C8492",
+            "Feuer" => "#E25835",
+            "Wasser" => "#3977C5",
+            "Elektro" => "#C9A613",
+            "Pflanze" => "#4C9A51",
+            "Eis" => "#4BA3B1",
+            "Kampf" => "#B43D45",
+            "Gift" => "#8E4AA5",
+            "Boden" => "#A8783F",
+            "Flug" => "#748CC5",
+            "Psycho" => "#D85683",
+            "Käfer" => "#7F961D",
+            "Gestein" => "#958143",
+            "Geist" => "#5D568B",
+            "Drache" => "#5E51B5",
+            "Unlicht" => "#514A52",
+            "Stahl" => "#657D8C",
+            "Fee" => "#C76B9C",
+            _ => "#475569"
+        };
     }
 
     private static Control CreateEmptyState(string value)
@@ -356,11 +443,7 @@ public sealed class MainWindow : Window
             Background = Brush("#0F1829"),
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(16),
-            Child = Text(
-                value,
-                13,
-                FontWeight.Normal,
-                "#94A3B8")
+            Child = Text(value, 13, FontWeight.Normal, "#94A3B8")
         };
     }
 
@@ -411,5 +494,6 @@ public sealed class MainWindow : Window
         WindowClosingEventArgs eventArgs)
     {
         await _viewModel.DisposeAsync();
+        _visualService.Dispose();
     }
 }
