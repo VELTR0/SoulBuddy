@@ -63,7 +63,7 @@ public sealed class MainWindow : Window
 
         var content = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("1.15*,1.25*,1.1*"),
+            ColumnDefinitions = new ColumnDefinitions("2.15*,0.62*,1.1*"),
             ColumnSpacing = 12,
             Margin = new Thickness(16, 12, 16, 14)
         };
@@ -524,6 +524,7 @@ public sealed class MainWindow : Window
             "#94A3B8");
         location.TextTrimming = TextTrimming.CharacterEllipsis;
         text.Children.Add(location);
+
         if (party)
         {
             text.Children.Add(Text(
@@ -531,41 +532,49 @@ public sealed class MainWindow : Window
                 small ? 8 : 9,
                 FontWeight.Medium,
                 "#FBBF24"));
-        }
 
-        var hpGrid = new Grid
+            var hpGrid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
+                ColumnSpacing = 5,
+                MinWidth = 0
+            };
+            hpGrid.Children.Add(Text(
+                pokemon.LevelText,
+                small ? 8 : 9,
+                FontWeight.Medium,
+                "#93C5FD"));
+            var hp = new ProgressBar
+            {
+                Minimum = 0,
+                Maximum = 100,
+                Value = pokemon.HpPercentage,
+                MinWidth = 0,
+                Height = 5,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = Brush("#263650"),
+                Foreground = Brush(HpColor(pokemon.HpPercentage))
+            };
+            Grid.SetColumn(hp, 1);
+            hpGrid.Children.Add(hp);
+            var hpText = Text(
+                pokemon.HpText,
+                small ? 8 : 9,
+                FontWeight.Medium,
+                "#CBD5E1");
+            Grid.SetColumn(hpText, 2);
+            hpGrid.Children.Add(hpText);
+            text.Children.Add(hpGrid);
+        }
+        else
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
-            ColumnSpacing = 5,
-            MinWidth = 0
-        };
-        hpGrid.Children.Add(Text(
-            pokemon.LevelText,
-            small ? 8 : 9,
-            FontWeight.Medium,
-            "#93C5FD"));
-        var hp = new ProgressBar
-        {
-            Minimum = 0,
-            Maximum = 100,
-            Value = pokemon.HpPercentage,
-            MinWidth = 0,
-            Height = 5,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Center,
-            Background = Brush("#263650"),
-            Foreground = Brush(HpColor(pokemon.HpPercentage))
-        };
-        Grid.SetColumn(hp, 1);
-        hpGrid.Children.Add(hp);
-        var hpText = Text(
-            pokemon.HpText,
-            small ? 8 : 9,
-            FontWeight.Medium,
-            "#CBD5E1");
-        Grid.SetColumn(hpText, 2);
-        hpGrid.Children.Add(hpText);
-        text.Children.Add(hpGrid);
+            text.Children.Add(Text(
+                pokemon.LevelText,
+                9,
+                FontWeight.Medium,
+                "#93C5FD"));
+        }
 
         var layout = new Grid
         {
