@@ -14,4 +14,6 @@ public sealed class CollectorEvent
 
     public IReadOnlyList<PartySlot> Slots { get; init; } =
         Array.Empty<PartySlot>();
+
+    public PlayerLiveState? State { get; init; }
 }
