@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Media;
+using SoulBuddy.Models;
 using SoulBuddy.Services;
 using SoulBuddy.ViewModels;
 
@@ -13,16 +14,20 @@ public sealed class MainWindow : Window
 {
     private readonly MainWindowViewModel _viewModel;
     private readonly PokemonVisualService _visualService = new();
+    private readonly SessionContext? _sessionContext;
     private readonly StackPanel _partyPanel;
     private readonly StackPanel _pokemonPanel;
 
-    public MainWindow()
+    public MainWindow(SessionContext? sessionContext = null)
     {
-        Title = "SoulBuddy";
+        _sessionContext = sessionContext;
+        Title = sessionContext is null
+            ? "SoulBuddy"
+            : $"SoulBuddy · {sessionContext.Session.Name} · {sessionContext.LocalPlayer.DisplayName}";
         Width = 1360;
-        Height = 820;
+        Height = 900;
         MinWidth = 980;
-        MinHeight = 640;
+        MinHeight = 700;
         Background = Brush("#0B1220");
 
         _viewModel = new MainWindowViewModel();
@@ -43,18 +48,22 @@ public sealed class MainWindow : Window
     {
         var root = new Grid
         {
-            RowDefinitions = new RowDefinitions("Auto,*,Auto")
+            RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto")
         };
 
         root.Children.Add(BuildHeader());
 
+        var sessionPanel = BuildSessionPanel();
+        Grid.SetRow(sessionPanel, 1);
+        root.Children.Add(sessionPanel);
+
         var contentGrid = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("390,*,380"),
-            Margin = new Thickness(24, 20),
+            Margin = new Thickness(24, 16, 24, 20),
             ColumnSpacing = 18
         };
-        Grid.SetRow(contentGrid, 1);
+        Grid.SetRow(contentGrid, 2);
 
         contentGrid.Children.Add(CreateCard(BuildSection(
             "Aktuelles Team",
@@ -97,7 +106,7 @@ public sealed class MainWindow : Window
         footerGrid.Children.Add(connection);
 
         footer.Child = footerGrid;
-        Grid.SetRow(footer, 2);
+        Grid.SetRow(footer, 3);
         root.Children.Add(footer);
 
         return root;
@@ -133,13 +142,78 @@ public sealed class MainWindow : Window
             CornerRadius = new CornerRadius(18),
             Padding = new Thickness(15, 8),
             VerticalAlignment = VerticalAlignment.Center,
-            Child = Text("PHASE 2 · VISUALS", 12, FontWeight.Bold, "#93C5FD")
+            Child = Text("PHASE 3A · SESSION", 12, FontWeight.Bold, "#93C5FD")
         };
         Grid.SetColumn(badge, 1);
         grid.Children.Add(badge);
 
         header.Child = grid;
         return header;
+    }
+
+    private Control BuildSessionPanel()
+    {
+        var session = _sessionContext?.Session;
+        var localPlayer = _sessionContext?.LocalPlayer;
+        var partner = session?.Players.FirstOrDefault(player => player.Id != localPlayer?.Id);
+
+        var panel = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("1.1*,1*,1.4*"),
+            ColumnSpacing = 14,
+            Margin = new Thickness(24, 16, 24, 0)
+        };
+
+        var sessionDetails = new StackPanel { Spacing = 6 };
+        sessionDetails.Children.Add(Text("AKTIVE SESSION", 11, FontWeight.Bold, "#93C5FD"));
+        sessionDetails.Children.Add(Text(session?.Name ?? "Keine Session geladen", 19, FontWeight.Bold, "#F8FAFC"));
+        sessionDetails.Children.Add(Text(
+            session is null ? "Session-ID nicht verfügbar" : $"ID: {session.Id}",
+            13,
+            FontWeight.Normal,
+            "#CBD5E1"));
+        panel.Children.Add(CreateCompactCard(sessionDetails));
+
+        var players = new StackPanel { Spacing = 6 };
+        players.Children.Add(Text("TEILNEHMER", 11, FontWeight.Bold, "#93C5FD"));
+        players.Children.Add(Text(
+            localPlayer is null ? "Du: nicht geladen" : $"Du: {localPlayer.DisplayName} · Slot {localPlayer.Slot}",
+            14,
+            FontWeight.SemiBold,
+            "#F8FAFC"));
+        players.Children.Add(Text(
+            partner is null ? "Mitspieler: noch nicht erkannt" : $"Mitspieler: {partner.DisplayName} · Slot {partner.Slot}",
+            13,
+            FontWeight.Normal,
+            partner is null ? "#FBBF24" : "#A7F3D0"));
+        var playersCard = CreateCompactCard(players);
+        Grid.SetColumn(playersCard, 1);
+        panel.Children.Add(playersCard);
+
+        var remoteState = new StackPanel { Spacing = 6 };
+        remoteState.Children.Add(Text("VERBINDUNG & PARTNERTEAM", 11, FontWeight.Bold, "#93C5FD"));
+        remoteState.Children.Add(Text(
+            "Lokal gespeichert · Netzwerk noch nicht verbunden",
+            14,
+            FontWeight.SemiBold,
+            "#FBBF24"));
+        remoteState.Children.Add(Text(
+            partner is null
+                ? "Es wurden noch keine Daten eines Mitspielers empfangen."
+                : $"{partner.DisplayName} ist lokal in der Session eingetragen. Pokémon-Daten wurden noch nicht synchronisiert.",
+            13,
+            FontWeight.Normal,
+            "#CBD5E1"));
+        remoteState.Children.Add(Text(
+            "Partner-Pokémon erscheinen hier, sobald Phase 3B den Datenaustausch zwischen beiden SoulBuddy-Instanzen herstellt.",
+            12,
+            FontWeight.Normal,
+            "#7C8BA1"));
+        var remoteCard = CreateCompactCard(remoteState);
+        Grid.SetColumn(remoteCard, 2);
+        panel.Children.Add(remoteCard);
+
+        return panel;
     }
 
     private Control BuildSection(
@@ -234,6 +308,19 @@ public sealed class MainWindow : Window
                 OffsetY = 4,
                 Color = Color.Parse("#33000000")
             })
+        };
+    }
+
+    private static Border CreateCompactCard(Control content)
+    {
+        return new Border
+        {
+            Background = Brush("#151F33"),
+            BorderBrush = Brush("#2B3C58"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(13),
+            Padding = new Thickness(16),
+            Child = content
         };
     }
 
