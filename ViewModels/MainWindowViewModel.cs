@@ -12,14 +12,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private readonly LocationMapper _locationMapper = new();
     private SoulBuddyRuntime? _runtime;
     private bool _refreshInProgress;
+    private bool _lastBattleState;
+    private string _lastActivitySignature = string.Empty;
     private string _statusText = "SoulBuddy wird gestartet …";
     private string _connectionText = "Offline";
     private string _partyCountText = "0 / 6";
     private string _pokemonCountText = "0 Pokémon";
     private string _detailsTitle = "Kein Pokémon ausgewählt";
     private string _detailsText = "Wähle ein Pokémon aus, um seine Details anzuzeigen.";
-    private string _liveEncounterTitle = "LIVE ENCOUNTER";
+    private string _liveEncounterTitle = "LIVE-STATUS";
     private string _liveEncounterText = "Warte auf Live-Daten aus dem Emulator …";
+    private string _localPlayerStatus = "Emulator wird gesucht …";
+    private string _localGameText = "Spiel: unbekannt";
+    private string _localActivePokemonText = "Aktives Pokémon: wird ermittelt …";
+    private string _partnerStatus = "Noch keine Netzwerkverbindung";
 
     public MainWindowViewModel()
     {
@@ -32,6 +38,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     public ObservableCollection<PokemonCardViewModel> Party { get; } = [];
     public ObservableCollection<PokemonCardViewModel> StoredPokemon { get; } = [];
+    public ObservableCollection<string> ActivityFeed { get; } = [];
 
     public string StatusText
     {
@@ -81,16 +88,46 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         private set => SetProperty(ref _liveEncounterText, value);
     }
 
+    public string LocalPlayerStatus
+    {
+        get => _localPlayerStatus;
+        private set => SetProperty(ref _localPlayerStatus, value);
+    }
+
+    public string LocalGameText
+    {
+        get => _localGameText;
+        private set => SetProperty(ref _localGameText, value);
+    }
+
+    public string LocalActivePokemonText
+    {
+        get => _localActivePokemonText;
+        private set => SetProperty(ref _localActivePokemonText, value);
+    }
+
+    public string PartnerStatus
+    {
+        get => _partnerStatus;
+        private set => SetProperty(ref _partnerStatus, value);
+    }
+
     public async Task InitializeAsync()
     {
         try
         {
             _runtime = await SoulBuddyRuntime.CreateAsync();
+            _runtime.PlayerLiveStateSource.StateChanged += OnLiveStateChanged;
             _runtime.Start();
 
             ConnectionText = _runtime.Config.SoullockeEnabled
                 ? "Soullocke aktiviert"
                 : "Lokal / Offline";
+            LocalPlayerStatus = "🟢 Collector verbunden";
+            LocalGameText = "Spiel: HeartGold / SoulSilver";
+            PartnerStatus = "Partner-Synchronisierung folgt als nächster Netzwerkschritt";
+            AddActivity("SoulBuddy gestartet");
+            AddActivity("Emulator-Collector verbunden");
 
             StatusText = $"Collector aktiv · {_runtime.EventFilePath}";
             await RefreshAsync();
@@ -98,7 +135,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         }
         catch (Exception ex)
         {
+            LocalPlayerStatus = "🔴 Collector nicht verbunden";
             StatusText = $"Startfehler: {ex.Message}";
+            AddActivity($"Startfehler: {ex.Message}");
         }
     }
 
@@ -106,6 +145,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     {
         DetailsTitle = pokemon.DetailsTitle;
         DetailsText = pokemon.DetailsText;
+    }
+
+    private void OnLiveStateChanged(object? sender, PlayerLiveState state)
+    {
+        Dispatcher.UIThread.Post(() => ApplyLiveState(state));
     }
 
     private async void OnRefreshTimerTick(object? sender, EventArgs eventArgs)
@@ -124,10 +168,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
         try
         {
-            var party = await _runtime.LivePartySource.ReadPartyAsync(
-                CancellationToken.None);
-            var stored = await _runtime.KnownPokemonStore.GetAllAsync(
-                CancellationToken.None);
+            var party = await _runtime.LivePartySource.ReadPartyAsync(CancellationToken.None);
+            var stored = await _runtime.KnownPokemonStore.GetAllAsync(CancellationToken.None);
             var liveState = _runtime.PlayerLiveStateSource.Read();
 
             ReplaceItems(Party, CreatePartyCards(party));
@@ -136,8 +178,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
             PartyCountText = $"{Party.Count} / 6";
             PokemonCountText = $"{StoredPokemon.Count} Pokémon";
-            StatusText =
-                $"Collector aktiv · Letzte Aktualisierung {DateTime.Now:HH:mm:ss}";
+            StatusText = $"Collector aktiv · Letzte Aktualisierung {DateTime.Now:HH:mm:ss}";
         }
         catch (Exception ex)
         {
@@ -149,9 +190,51 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         }
     }
 
-    private void UpdateLiveEncounter(
-        PlayerLiveState state,
-        IReadOnlyList<PartySlot> party)
+    private void ApplyLiveState(PlayerLiveState state)
+    {
+        LocalPlayerStatus = "🟢 Live-Daten werden empfangen";
+        var active = state.ActivePokemon;
+        LocalActivePokemonText = active is null
+            ? "Aktives Pokémon: wird ermittelt …"
+            : $"Aktiv: {DisplayPokemonName(active)} · Lv. {active.Level} · {active.CurrentHp}/{active.MaxHp} KP";
+
+        if (state.InBattle != _lastBattleState)
+        {
+            AddActivity(state.InBattle ? "Kampf begonnen" : "Kampf beendet");
+            _lastBattleState = state.InBattle;
+        }
+
+        var signature = state.InBattle
+            ? $"battle:{state.BattleKind}:{state.Opponent?.SpeciesId}:{state.ActivePokemon?.SpeciesId}"
+            : $"field:{state.LocationId}:{state.LocationName}";
+
+        if (signature != _lastActivitySignature)
+        {
+            if (state.InBattle && state.Opponent is not null)
+            {
+                AddActivity($"Gegner erkannt: {DisplayPokemonName(state.Opponent)} Lv. {state.Opponent.Level}");
+            }
+            else if (!state.InBattle && !string.IsNullOrWhiteSpace(state.LocationName))
+            {
+                AddActivity($"Aufenthalt: {state.LocationName}");
+            }
+
+            _lastActivitySignature = signature;
+        }
+
+        UpdateLiveEncounter(state, []);
+    }
+
+    private void AddActivity(string message)
+    {
+        ActivityFeed.Insert(0, $"{DateTime.Now:HH:mm:ss}  {message}");
+        while (ActivityFeed.Count > 30)
+        {
+            ActivityFeed.RemoveAt(ActivityFeed.Count - 1);
+        }
+    }
+
+    private void UpdateLiveEncounter(PlayerLiveState state, IReadOnlyList<PartySlot> party)
     {
         var ownPokemon = state.ActivePokemon;
 
@@ -177,6 +260,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             }
         }
 
+        if (ownPokemon is not null)
+        {
+            LocalActivePokemonText =
+                $"Aktiv: {DisplayPokemonName(ownPokemon)} · Lv. {ownPokemon.Level} · " +
+                $"{ownPokemon.CurrentHp}/{ownPokemon.MaxHp} KP";
+        }
+
         var location = string.IsNullOrWhiteSpace(state.LocationName)
             ? state.LocationId is null
                 ? "Aufenthaltsort wird ermittelt"
@@ -196,33 +286,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                 ? "Trainerkampf"
                 : $"Trainerkampf · {state.TrainerName}",
             "wild" => "Wilder Kampf",
-            _ => "Kampf erkannt · Typ wird geprüft"
+            _ => "Kampf erkannt"
         };
 
-        var lines = new List<string>
-        {
-            $"⚔ {kind}",
-            $"📍 {location}"
-        };
+        var lines = new List<string> { $"⚔ {kind}", $"📍 {location}" };
 
-        if (state.Opponent is not null)
-        {
-            lines.Add(
-                $"Gegner: {DisplayPokemonName(state.Opponent)} · " +
-                $"Lv. {state.Opponent.Level} · " +
-                $"{state.Opponent.CurrentHp}/{state.Opponent.MaxHp} KP");
-        }
-        else
-        {
-            lines.Add("Gegner: wird ermittelt …");
-        }
+        lines.Add(state.Opponent is null
+            ? "Gegner: wird ermittelt …"
+            : $"Gegner: {DisplayPokemonName(state.Opponent)} · Lv. {state.Opponent.Level} · " +
+              $"{state.Opponent.CurrentHp}/{state.Opponent.MaxHp} KP");
 
         if (ownPokemon is not null)
         {
-            lines.Add(
-                $"Aktiv: {DisplayPokemonName(ownPokemon)} · " +
-                $"Lv. {ownPokemon.Level} · " +
-                $"{ownPokemon.CurrentHp}/{ownPokemon.MaxHp} KP");
+            lines.Add($"Aktiv: {DisplayPokemonName(ownPokemon)} · Lv. {ownPokemon.Level} · " +
+                      $"{ownPokemon.CurrentHp}/{ownPokemon.MaxHp} KP");
         }
 
         LiveEncounterTitle = "LIVE ENCOUNTER";
@@ -230,12 +307,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     }
 
     private static string DisplayPokemonName(LivePokemonState pokemon) =>
-        string.IsNullOrWhiteSpace(pokemon.Nickname)
-            ? pokemon.SpeciesName
-            : pokemon.Nickname;
+        string.IsNullOrWhiteSpace(pokemon.Nickname) ? pokemon.SpeciesName : pokemon.Nickname;
 
-    private IEnumerable<PokemonCardViewModel> CreatePartyCards(
-        IReadOnlyList<PartySlot> party)
+    private IEnumerable<PokemonCardViewModel> CreatePartyCards(IReadOnlyList<PartySlot> party)
     {
         return party
             .Where(slot => slot.Pokemon is not null)
@@ -287,8 +361,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             });
     }
 
-    private static IEnumerable<PokemonCardViewModel> CreateStoredCards(
-        IReadOnlyList<KnownPokemonEntry> pokemon)
+    private static IEnumerable<PokemonCardViewModel> CreateStoredCards(IReadOnlyList<KnownPokemonEntry> pokemon)
     {
         return pokemon
             .OrderByDescending(item => item.FirstSeenAt)
@@ -306,9 +379,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                     Level = entry.CurrentLevel,
                     CurrentHp = entry.CurrentHp,
                     MaxHp = entry.MaxHp,
-                    Subtitle = entry.SoullockeSynced
-                        ? "Soullocke synchronisiert"
-                        : entry.Location,
+                    Subtitle = entry.SoullockeSynced ? "Soullocke synchronisiert" : entry.Location,
                     DetailsTitle = displayName,
                     DetailsText =
                         $"Spezies: {entry.Species} (#{entry.SpeciesId})\n" +
@@ -326,11 +397,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             });
     }
 
-    private string GetLocationDisplayName(int locationId)
-    {
-        return _locationMapper.GetLocationName(locationId)
-            ?? $"Unbekannter Fangort ({locationId})";
-    }
+    private string GetLocationDisplayName(int locationId) =>
+        _locationMapper.GetLocationName(locationId) ?? $"Unbekannter Fangort ({locationId})";
 
     private static string ValueOrUnknown(string value) =>
         string.IsNullOrWhiteSpace(value) ? "Unbekannt" : value;
@@ -339,32 +407,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     {
         return id switch
         {
-            1 => "Meisterball",
-            2 => "Hyperball",
-            3 => "Superball",
-            4 => "Pokéball",
-            5 => "Safariball",
-            6 => "Netzball",
-            7 => "Tauchball",
-            8 => "Nestball",
-            9 => "Wiederball",
-            10 => "Timerball",
-            11 => "Luxusball",
-            12 => "Premierball",
-            13 => "Finsterball",
-            14 => "Heilball",
-            15 => "Flottball",
-            16 => "Jubelball",
+            1 => "Meisterball", 2 => "Hyperball", 3 => "Superball", 4 => "Pokéball",
+            5 => "Safariball", 6 => "Netzball", 7 => "Tauchball", 8 => "Nestball",
+            9 => "Wiederball", 10 => "Timerball", 11 => "Luxusball", 12 => "Premierball",
+            13 => "Finsterball", 14 => "Heilball", 15 => "Flottball", 16 => "Jubelball",
             _ => id > 0 ? $"Ball #{id}" : "Unbekannt"
         };
     }
 
-    private static void ReplaceItems<T>(
-        ObservableCollection<T> target,
-        IEnumerable<T> items)
+    private static void ReplaceItems<T>(ObservableCollection<T> target, IEnumerable<T> items)
     {
         target.Clear();
-
         foreach (var item in items)
         {
             target.Add(item);
@@ -378,6 +431,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
         if (_runtime is not null)
         {
+            _runtime.PlayerLiveStateSource.StateChanged -= OnLiveStateChanged;
             await _runtime.DisposeAsync();
             _runtime = null;
         }
