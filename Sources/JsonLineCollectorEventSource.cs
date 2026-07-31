@@ -7,21 +7,23 @@ public sealed class JsonLineCollectorEventSource
 {
     private readonly string _eventFilePath;
     private readonly LivePartySource _partySource;
+    private readonly PlayerLiveStateSource _liveStateSource;
     private long _readPosition;
     private bool _readPositionInitialized;
 
-    private readonly JsonSerializerOptions _jsonOptions =
-        new()
-        {
-            PropertyNameCaseInsensitive = true
-        };
+    private readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     public JsonLineCollectorEventSource(
         string eventFilePath,
-        LivePartySource partySource)
+        LivePartySource partySource,
+        PlayerLiveStateSource liveStateSource)
     {
         _eventFilePath = eventFilePath;
         _partySource = partySource;
+        _liveStateSource = liveStateSource;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -54,8 +56,7 @@ public sealed class JsonLineCollectorEventSource
             }
             catch (UnauthorizedAccessException ex)
             {
-                Console.WriteLine(
-                    $"Zugriff auf die Event-Datei nicht möglich: {ex.Message}");
+                Console.WriteLine($"Zugriff auf die Event-Datei nicht möglich: {ex.Message}");
                 await Task.Delay(1000, cancellationToken);
             }
         }
@@ -72,8 +73,7 @@ public sealed class JsonLineCollectorEventSource
         _readPositionInitialized = true;
     }
 
-    private async Task ReadAvailableEventsAsync(
-        CancellationToken cancellationToken)
+    private async Task ReadAvailableEventsAsync(CancellationToken cancellationToken)
     {
         await using var stream = new FileStream(
             _eventFilePath,
@@ -114,9 +114,7 @@ public sealed class JsonLineCollectorEventSource
         }
     }
 
-    private async Task ProcessLineAsync(
-        string line,
-        CancellationToken cancellationToken)
+    private async Task ProcessLineAsync(string line, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(line))
         {
@@ -127,10 +125,7 @@ public sealed class JsonLineCollectorEventSource
 
         try
         {
-            collectorEvent =
-                JsonSerializer.Deserialize<CollectorEvent>(
-                    line,
-                    _jsonOptions);
+            collectorEvent = JsonSerializer.Deserialize<CollectorEvent>(line, _jsonOptions);
         }
         catch (JsonException ex)
         {
@@ -141,7 +136,6 @@ public sealed class JsonLineCollectorEventSource
 
         if (collectorEvent is null)
         {
-            Console.WriteLine("Leere Collector-Nachricht empfangen.");
             return;
         }
 
@@ -159,29 +153,27 @@ public sealed class JsonLineCollectorEventSource
                 break;
 
             case "party-update":
-                await _partySource.ApplyUpdateAsync(
-                    collectorEvent.Slots,
-                    cancellationToken);
+                await _partySource.ApplyUpdateAsync(collectorEvent.Slots, cancellationToken);
                 LogUpdate("Party", collectorEvent);
                 break;
 
             case "box-update":
-                await _partySource.ApplyBoxUpdateAsync(
-                    collectorEvent.Slots,
-                    cancellationToken);
+                await _partySource.ApplyBoxUpdateAsync(collectorEvent.Slots, cancellationToken);
                 LogUpdate("Box", collectorEvent);
+                break;
+
+            case "player-state" when collectorEvent.State is not null:
+                _liveStateSource.Apply(collectorEvent.State);
                 break;
 
             default:
                 Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] " +
-                    $"Collector-Ereignis empfangen: {collectorEvent.Type}");
+                    $"[{DateTime.Now:HH:mm:ss}] Collector-Ereignis empfangen: {collectorEvent.Type}");
                 break;
         }
     }
 
-    private static void HandleCollectorStarted(
-        CollectorEvent collectorEvent)
+    private static void HandleCollectorStarted(CollectorEvent collectorEvent)
     {
         Console.WriteLine(
             $"[{DateTime.Now:HH:mm:ss}] Collector erkannt. " +
@@ -189,12 +181,9 @@ public sealed class JsonLineCollectorEventSource
             $"Protokoll: {collectorEvent.ProtocolVersion}");
     }
 
-    private static void LogUpdate(
-        string updateType,
-        CollectorEvent collectorEvent)
+    private static void LogUpdate(string updateType, CollectorEvent collectorEvent)
     {
-        var generationText =
-            collectorEvent.Generation?.ToString() ?? "unbekannt";
+        var generationText = collectorEvent.Generation?.ToString() ?? "unbekannt";
 
         Console.WriteLine(
             $"[{DateTime.Now:HH:mm:ss}] {updateType}-Update übernommen. " +
