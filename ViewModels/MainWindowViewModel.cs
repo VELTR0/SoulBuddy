@@ -246,22 +246,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         UpdatePartnerStatus(network.LatestRemoteSnapshot, network);
     }
 
-    private void UpdatePartnerStatus(
-        NetworkPlayerSnapshot? snapshot,
-        SoulBuddyNetworkService network)
+    private void UpdatePartnerStatus(NetworkPlayerSnapshot? snapshot, SoulBuddyNetworkService network)
     {
         if (snapshot is null)
         {
             PartnerStatus = network.State switch
             {
-                SoulBuddyNetworkState.Connected =>
-                    $"🟢 {network.RemotePlayerName} verbunden · warte auf Spieldaten …",
-                SoulBuddyNetworkState.Waiting =>
-                    "🟡 Online · warte auf Mitspieler …",
-                SoulBuddyNetworkState.Connecting =>
-                    "🔍 Suche nach der Session im lokalen Netzwerk …",
-                SoulBuddyNetworkState.Error =>
-                    $"🔴 {network.StatusText}",
+                SoulBuddyNetworkState.Connected => $"🟢 {network.RemotePlayerName} verbunden · warte auf Spieldaten …",
+                SoulBuddyNetworkState.Waiting => "🟡 Online · warte auf Mitspieler …",
+                SoulBuddyNetworkState.Connecting => "🔍 Suche nach der Session im lokalen Netzwerk …",
+                SoulBuddyNetworkState.Error => $"🔴 {network.StatusText}",
                 _ => "Offline · keine Partnerdaten"
             };
             return;
@@ -269,13 +263,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
         var activeText = snapshot.ActivePokemon is null
             ? "Aktiv: unbekannt"
-            : $"Aktiv: {snapshot.ActivePokemon.DisplayName} · Lv. {snapshot.ActivePokemon.Level} · " +
-              $"{snapshot.ActivePokemon.CurrentHp}/{snapshot.ActivePokemon.MaxHp} KP";
-
+            : $"Aktiv: {snapshot.ActivePokemon.DisplayName} · Lv. {snapshot.ActivePokemon.Level} · {snapshot.ActivePokemon.CurrentHp}/{snapshot.ActivePokemon.MaxHp} KP";
         var age = DateTimeOffset.UtcNow - snapshot.Timestamp;
-        var ageText = age.TotalSeconds < 2
-            ? "gerade eben"
-            : $"vor {Math.Max(1, (int)age.TotalSeconds)} Sekunden";
+        var ageText = age.TotalSeconds < 2 ? "gerade eben" : $"vor {Math.Max(1, (int)age.TotalSeconds)} Sekunden";
 
         PartnerStatus =
             $"🟢 {snapshot.PlayerName} online\n" +
@@ -285,14 +275,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             $"Aktualisiert: {ageText}";
     }
 
-    private static NetworkPokemonSnapshot ToNetworkPokemon(
-        PokemonCardViewModel pokemon) => new()
+    private static NetworkPokemonSnapshot ToNetworkPokemon(PokemonCardViewModel pokemon) => new()
     {
         SpeciesId = pokemon.SpeciesId,
         SpeciesName = pokemon.Species,
-        Nickname = pokemon.DisplayName == pokemon.Species
-            ? string.Empty
-            : pokemon.DisplayName,
+        Nickname = pokemon.DisplayName == pokemon.Species ? string.Empty : pokemon.DisplayName,
         Level = pokemon.Level,
         CurrentHp = pokemon.CurrentHp,
         MaxHp = pokemon.MaxHp,
@@ -327,7 +314,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             {
                 AddActivity($"Aufenthalt: {state.LocationName}");
             }
-
             _lastActivitySignature = signature;
         }
 
@@ -346,15 +332,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private void UpdateLiveEncounter(PlayerLiveState state, IReadOnlyList<PartySlot> party)
     {
         var ownPokemon = state.ActivePokemon;
-
         if (ownPokemon is null)
         {
-            var fallback = party
-                .Where(slot => slot.Pokemon is not null)
+            var fallback = party.Where(slot => slot.Pokemon is not null)
                 .OrderBy(slot => slot.SlotId)
                 .Select(slot => slot.Pokemon!)
                 .FirstOrDefault(pokemon => pokemon.Hp.Current > 0);
-
             if (fallback is not null)
             {
                 ownPokemon = new LivePokemonState
@@ -371,15 +354,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
         if (ownPokemon is not null)
         {
-            LocalActivePokemonText =
-                $"Aktiv: {DisplayPokemonName(ownPokemon)} · Lv. {ownPokemon.Level} · " +
-                $"{ownPokemon.CurrentHp}/{ownPokemon.MaxHp} KP";
+            LocalActivePokemonText = $"Aktiv: {DisplayPokemonName(ownPokemon)} · Lv. {ownPokemon.Level} · {ownPokemon.CurrentHp}/{ownPokemon.MaxHp} KP";
         }
 
         var location = string.IsNullOrWhiteSpace(state.LocationName)
-            ? state.LocationId is null
-                ? "Aufenthaltsort wird ermittelt"
-                : $"Unbekannter Ort ({state.LocationId})"
+            ? state.LocationId is null ? "Aufenthaltsort wird ermittelt" : $"Unbekannter Ort ({state.LocationId})"
             : state.LocationName;
 
         if (!state.InBattle)
@@ -391,26 +370,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
         var kind = state.BattleKind switch
         {
-            "trainer" => string.IsNullOrWhiteSpace(state.TrainerName)
-                ? "Trainerkampf"
-                : $"Trainerkampf · {state.TrainerName}",
+            "trainer" => string.IsNullOrWhiteSpace(state.TrainerName) ? "Trainerkampf" : $"Trainerkampf · {state.TrainerName}",
             "wild" => "Wilder Kampf",
             _ => "Kampf erkannt"
         };
-
         var lines = new List<string> { $"⚔ {kind}", $"📍 {location}" };
-
         lines.Add(state.Opponent is null
             ? "Gegner: wird ermittelt …"
-            : $"Gegner: {DisplayPokemonName(state.Opponent)} · Lv. {state.Opponent.Level} · " +
-              $"{state.Opponent.CurrentHp}/{state.Opponent.MaxHp} KP");
-
+            : $"Gegner: {DisplayPokemonName(state.Opponent)} · Lv. {state.Opponent.Level} · {state.Opponent.CurrentHp}/{state.Opponent.MaxHp} KP");
         if (ownPokemon is not null)
         {
-            lines.Add($"Aktiv: {DisplayPokemonName(ownPokemon)} · Lv. {ownPokemon.Level} · " +
-                      $"{ownPokemon.CurrentHp}/{ownPokemon.MaxHp} KP");
+            lines.Add($"Aktiv: {DisplayPokemonName(ownPokemon)} · Lv. {ownPokemon.Level} · {ownPokemon.CurrentHp}/{ownPokemon.MaxHp} KP");
         }
-
         LiveEncounterTitle = "LIVE ENCOUNTER";
         LiveEncounterText = string.Join(Environment.NewLine, lines);
     }
@@ -420,21 +391,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private IEnumerable<PokemonCardViewModel> CreatePartyCards(IReadOnlyList<PartySlot> party)
     {
-        return party
-            .Where(slot => slot.Pokemon is not null)
+        return party.Where(slot => slot.Pokemon is not null)
             .OrderBy(slot => slot.SlotId)
             .Select(slot =>
             {
                 var pokemon = slot.Pokemon!;
-                var displayName = string.IsNullOrWhiteSpace(pokemon.Nickname)
-                    ? pokemon.SpeciesName
-                    : pokemon.Nickname;
-                var gender = pokemon.IsGenderless
-                    ? "Geschlechtslos"
-                    : pokemon.IsFemale ? "Weiblich" : "Männlich";
+                var displayName = string.IsNullOrWhiteSpace(pokemon.Nickname) ? pokemon.SpeciesName : pokemon.Nickname;
+                var gender = pokemon.IsGenderless ? "Geschlechtslos" : pokemon.IsFemale ? "Weiblich" : "Männlich";
                 var ball = GetPokeballName(pokemon.Pokeball);
                 var location = GetLocationDisplayName(pokemon.LocationMet);
-
                 return new PokemonCardViewModel
                 {
                     DisplayName = displayName,
@@ -472,14 +437,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private static IEnumerable<PokemonCardViewModel> CreateStoredCards(IReadOnlyList<KnownPokemonEntry> pokemon)
     {
-        return pokemon
-            .OrderByDescending(item => item.FirstSeenAt)
+        return pokemon.OrderByDescending(item => item.FirstSeenAt)
             .Select(entry =>
             {
-                var displayName = string.IsNullOrWhiteSpace(entry.Nickname)
-                    ? entry.Species
-                    : entry.Nickname;
-
+                var displayName = string.IsNullOrWhiteSpace(entry.Nickname) ? entry.Species : entry.Nickname;
                 return new PokemonCardViewModel
                 {
                     DisplayName = displayName,
@@ -509,8 +470,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private string GetLocationDisplayName(int locationId) =>
         _locationMapper.GetLocationName(locationId) ?? $"Unbekannter Fangort ({locationId})";
 
-    private static string ValueOrUnknown(string value) =>
-        string.IsNullOrWhiteSpace(value) ? "Unbekannt" : value;
+    private static string ValueOrUnknown(string value) => string.IsNullOrWhiteSpace(value) ? "Unbekannt" : value;
 
     private static string GetPokeballName(int id)
     {
@@ -526,18 +486,45 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private static void ReplaceItems<T>(ObservableCollection<T> target, IEnumerable<T> items)
     {
+        var next = items.ToArray();
+        if (target.Count == next.Length && target.Zip(next).All(pair => ItemsEqual(pair.First, pair.Second)))
+        {
+            return;
+        }
+
         target.Clear();
-        foreach (var item in items)
+        foreach (var item in next)
         {
             target.Add(item);
         }
+    }
+
+    private static bool ItemsEqual<T>(T left, T right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left is PokemonCardViewModel a && right is PokemonCardViewModel b)
+        {
+            return a.SpeciesId == b.SpeciesId &&
+                   a.DisplayName == b.DisplayName &&
+                   a.Species == b.Species &&
+                   a.Level == b.Level &&
+                   a.CurrentHp == b.CurrentHp &&
+                   a.MaxHp == b.MaxHp &&
+                   a.Subtitle == b.Subtitle &&
+                   a.IsShiny == b.IsShiny;
+        }
+
+        return EqualityComparer<T>.Default.Equals(left, right);
     }
 
     public async ValueTask DisposeAsync()
     {
         _refreshTimer.Stop();
         _refreshTimer.Tick -= OnRefreshTimerTick;
-
         if (_runtime is not null)
         {
             _runtime.PlayerLiveStateSource.StateChanged -= OnLiveStateChanged;
