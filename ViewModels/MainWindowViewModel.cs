@@ -109,18 +109,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
         try
         {
-            var party = await _runtime.LivePartySource.ReadPartyAsync(
-                CancellationToken.None);
-            var stored = await _runtime.KnownPokemonStore.GetAllAsync(
-                CancellationToken.None);
+            var party = await _runtime.LivePartySource.ReadPartyAsync(CancellationToken.None);
+            var stored = await _runtime.KnownPokemonStore.GetAllAsync(CancellationToken.None);
 
             ReplaceItems(Party, CreatePartyCards(party));
             ReplaceItems(StoredPokemon, CreateStoredCards(stored));
 
             PartyCountText = $"{Party.Count} / 6";
             PokemonCountText = $"{StoredPokemon.Count} Pokémon";
-            StatusText =
-                $"Collector aktiv · Letzte Aktualisierung {DateTime.Now:HH:mm:ss}";
+            StatusText = $"Collector aktiv · Letzte Aktualisierung {DateTime.Now:HH:mm:ss}";
         }
         catch (Exception ex)
         {
@@ -144,20 +141,35 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                 var displayName = string.IsNullOrWhiteSpace(pokemon.Nickname)
                     ? pokemon.SpeciesName
                     : pokemon.Nickname;
+                var gender = pokemon.IsGenderless
+                    ? "Geschlechtslos"
+                    : pokemon.IsFemale ? "Weiblich" : "Männlich";
+                var ball = GetPokeballName(pokemon.Pokeball);
 
                 return new PokemonCardViewModel
                 {
                     DisplayName = displayName,
                     Species = pokemon.SpeciesName,
+                    SpeciesId = pokemon.Species,
                     Level = pokemon.Level,
                     CurrentHp = pokemon.Hp.Current,
                     MaxHp = pokemon.Hp.Max,
+                    Nature = pokemon.Nature,
+                    Ability = pokemon.Ability,
+                    Gender = gender,
+                    Pokeball = ball,
+                    IsShiny = pokemon.IsShiny,
                     Subtitle = $"Fangort-ID {pokemon.LocationMet}",
                     DetailsTitle = displayName,
                     DetailsText =
                         $"Spezies: {pokemon.SpeciesName} (#{pokemon.Species})\n" +
                         $"Level: {pokemon.Level}\n" +
                         $"KP: {pokemon.Hp.Current}/{pokemon.Hp.Max}\n" +
+                        $"Geschlecht: {gender}\n" +
+                        $"Wesen: {ValueOrUnknown(pokemon.Nature)}\n" +
+                        $"Fähigkeit: {ValueOrUnknown(pokemon.Ability)}\n" +
+                        $"Pokéball: {ball}\n" +
+                        $"Shiny: {(pokemon.IsShiny ? "Ja" : "Nein")}\n" +
                         $"Fanglevel: {pokemon.LevelMet}\n" +
                         $"Fangort-ID: {pokemon.LocationMet}\n\n" +
                         "Technische Daten\n" +
@@ -183,6 +195,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                 {
                     DisplayName = displayName,
                     Species = entry.Species,
+                    SpeciesId = entry.SpeciesId,
                     Level = entry.CurrentLevel,
                     CurrentHp = entry.CurrentHp,
                     MaxHp = entry.MaxHp,
@@ -203,6 +216,33 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                         $"Zuletzt gesehen: {entry.LastSeenAt.LocalDateTime:g}"
                 };
             });
+    }
+
+    private static string ValueOrUnknown(string value) =>
+        string.IsNullOrWhiteSpace(value) ? "Unbekannt" : value;
+
+    private static string GetPokeballName(int id)
+    {
+        return id switch
+        {
+            1 => "Meisterball",
+            2 => "Hyperball",
+            3 => "Superball",
+            4 => "Pokéball",
+            5 => "Safariball",
+            6 => "Netzball",
+            7 => "Tauchball",
+            8 => "Nestball",
+            9 => "Wiederball",
+            10 => "Timerball",
+            11 => "Luxusball",
+            12 => "Premierball",
+            13 => "Finsterball",
+            14 => "Heilball",
+            15 => "Flottball",
+            16 => "Jubelball",
+            _ => id > 0 ? $"Ball #{id}" : "Unbekannt"
+        };
     }
 
     private static void ReplaceItems<T>(
