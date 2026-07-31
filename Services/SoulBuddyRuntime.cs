@@ -19,6 +19,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         string databasePath,
         HttpClient httpClient,
         LivePartySource livePartySource,
+        PlayerLiveStateSource playerLiveStateSource,
         KnownPokemonStore knownPokemonStore,
         SyncService syncService,
         JsonLineCollectorEventSource collectorEventSource)
@@ -30,6 +31,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         DatabasePath = databasePath;
         _httpClient = httpClient;
         LivePartySource = livePartySource;
+        PlayerLiveStateSource = playerLiveStateSource;
         KnownPokemonStore = knownPokemonStore;
         SyncService = syncService;
         CollectorEventSource = collectorEventSource;
@@ -41,6 +43,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
     public string EventFilePath { get; }
     public string DatabasePath { get; }
     public LivePartySource LivePartySource { get; }
+    public PlayerLiveStateSource PlayerLiveStateSource { get; }
     public KnownPokemonStore KnownPokemonStore { get; }
     public SyncService SyncService { get; }
     public JsonLineCollectorEventSource CollectorEventSource { get; }
@@ -54,13 +57,8 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
     {
         var configDirectory = FindConfigDirectory();
 
-        var defaultConfigPath = Path.Combine(
-            configDirectory,
-            "appsettings.json");
-
-        var localConfigPath = Path.Combine(
-            configDirectory,
-            "appsettings.local.json");
+        var defaultConfigPath = Path.Combine(configDirectory, "appsettings.json");
+        var localConfigPath = Path.Combine(configDirectory, "appsettings.local.json");
 
         if (!File.Exists(defaultConfigPath))
         {
@@ -99,10 +97,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
 
         var partyJsonPath = Path.IsPathRooted(config.PartyJsonPath)
             ? Path.GetFullPath(config.PartyJsonPath)
-            : Path.GetFullPath(
-                Path.Combine(
-                    configDirectory,
-                    config.PartyJsonPath));
+            : Path.GetFullPath(Path.Combine(configDirectory, config.PartyJsonPath));
 
         var runtimeDirectory = Path.GetDirectoryName(partyJsonPath);
 
@@ -114,13 +109,8 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
 
         Directory.CreateDirectory(runtimeDirectory);
 
-        var eventFilePath = Path.Combine(
-            runtimeDirectory,
-            "emulator-events.jsonl");
-
-        var databasePath = Path.Combine(
-            configDirectory,
-            "soulbuddy.db");
+        var eventFilePath = Path.Combine(runtimeDirectory, "emulator-events.jsonl");
+        var databasePath = Path.Combine(configDirectory, "soulbuddy.db");
 
         var httpClient = new HttpClient
         {
@@ -129,6 +119,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
 
         var snapshotPartySource = new JsonPartySource(partyJsonPath);
         var livePartySource = new LivePartySource(snapshotPartySource);
+        var playerLiveStateSource = new PlayerLiveStateSource();
         var knownPokemonStore = new KnownPokemonStore(databasePath);
         var locationMapper = new LocationMapper();
         var soullockeClient = new SoullockeClient(httpClient, config);
@@ -142,7 +133,8 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
 
         var collectorEventSource = new JsonLineCollectorEventSource(
             eventFilePath,
-            livePartySource);
+            livePartySource,
+            playerLiveStateSource);
 
         return new SoulBuddyRuntime(
             config,
@@ -152,6 +144,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             databasePath,
             httpClient,
             livePartySource,
+            playerLiveStateSource,
             knownPokemonStore,
             syncService,
             collectorEventSource);
@@ -165,8 +158,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             AppContext.BaseDirectory
         };
 
-        foreach (var searchRoot in searchRoots.Distinct(
-                     StringComparer.OrdinalIgnoreCase))
+        foreach (var searchRoot in searchRoots.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var projectDirectory = FindProjectDirectory(searchRoot);
 
@@ -176,8 +168,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             }
         }
 
-        foreach (var searchRoot in searchRoots.Distinct(
-                     StringComparer.OrdinalIgnoreCase))
+        foreach (var searchRoot in searchRoots.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var configDirectory = FindDirectoryContainingFile(
                 searchRoot,
@@ -199,10 +190,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
 
         while (directory is not null)
         {
-            var configPath = Path.Combine(
-                directory.FullName,
-                "appsettings.json");
-
+            var configPath = Path.Combine(directory.FullName, "appsettings.json");
             var collectorPath = Path.Combine(
                 directory.FullName,
                 "collectors",
