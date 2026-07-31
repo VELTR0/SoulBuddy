@@ -125,7 +125,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                 : "Lokal / Offline";
             LocalPlayerStatus = "🟢 Collector verbunden";
             LocalGameText = "Spiel: HeartGold / SoulSilver";
-            PartnerStatus = "Partner-Synchronisierung folgt als nächster Netzwerkschritt";
+            PartnerStatus = "Offline · Über die Netzwerksteuerung optional verbinden";
             AddActivity("SoulBuddy gestartet");
             AddActivity("Emulator-Collector verbunden");
 
@@ -179,6 +179,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             PartyCountText = $"{Party.Count} / 6";
             PokemonCountText = $"{StoredPokemon.Count} Pokémon";
             StatusText = $"Collector aktiv · Letzte Aktualisierung {DateTime.Now:HH:mm:ss}";
+
+            await SynchronizeNetworkAsync(liveState);
         }
         catch (Exception ex)
         {
@@ -189,6 +191,113 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             _refreshInProgress = false;
         }
     }
+
+    private async Task SynchronizeNetworkAsync(PlayerLiveState liveState)
+    {
+        var network = SoulBuddyNetworkService.Current;
+        if (network is null)
+        {
+            return;
+        }
+
+        if (network.State == SoulBuddyNetworkState.Connected)
+        {
+            ConnectionText = $"Online · {network.RemotePlayerName}";
+
+            var active = liveState.ActivePokemon is null
+                ? Party.FirstOrDefault(item => item.CurrentHp > 0)
+                : null;
+
+            var snapshot = new NetworkPlayerSnapshot
+            {
+                PlayerName = network.PlayerName,
+                Game = LocalGameText.Replace("Spiel: ", string.Empty),
+                Timestamp = DateTimeOffset.UtcNow,
+                StoredPokemonCount = StoredPokemon.Count,
+                ActivePokemon = liveState.ActivePokemon is not null
+                    ? new NetworkPokemonSnapshot
+                    {
+                        SpeciesId = liveState.ActivePokemon.SpeciesId,
+                        SpeciesName = liveState.ActivePokemon.SpeciesName,
+                        Nickname = liveState.ActivePokemon.Nickname,
+                        Level = liveState.ActivePokemon.Level,
+                        CurrentHp = liveState.ActivePokemon.CurrentHp,
+                        MaxHp = liveState.ActivePokemon.MaxHp
+                    }
+                    : active is null
+                        ? null
+                        : ToNetworkPokemon(active),
+                Party = Party.Select(ToNetworkPokemon).ToArray()
+            };
+
+            await network.SendPlayerSnapshotAsync(snapshot);
+        }
+        else
+        {
+            ConnectionText = network.State switch
+            {
+                SoulBuddyNetworkState.Waiting => "Online · wartet",
+                SoulBuddyNetworkState.Connecting => "Online · sucht",
+                SoulBuddyNetworkState.Error => "Netzwerkfehler",
+                _ => "Lokal / Offline"
+            };
+        }
+
+        UpdatePartnerStatus(network.LatestRemoteSnapshot, network);
+    }
+
+    private void UpdatePartnerStatus(
+        NetworkPlayerSnapshot? snapshot,
+        SoulBuddyNetworkService network)
+    {
+        if (snapshot is null)
+        {
+            PartnerStatus = network.State switch
+            {
+                SoulBuddyNetworkState.Connected =>
+                    $"🟢 {network.RemotePlayerName} verbunden · warte auf Spieldaten …",
+                SoulBuddyNetworkState.Waiting =>
+                    "🟡 Online · warte auf Mitspieler …",
+                SoulBuddyNetworkState.Connecting =>
+                    "🔍 Suche nach der Session im lokalen Netzwerk …",
+                SoulBuddyNetworkState.Error =>
+                    $"🔴 {network.StatusText}",
+                _ => "Offline · keine Partnerdaten"
+            };
+            return;
+        }
+
+        var activeText = snapshot.ActivePokemon is null
+            ? "Aktiv: unbekannt"
+            : $"Aktiv: {snapshot.ActivePokemon.DisplayName} · Lv. {snapshot.ActivePokemon.Level} · " +
+              $"{snapshot.ActivePokemon.CurrentHp}/{snapshot.ActivePokemon.MaxHp} KP";
+
+        var age = DateTimeOffset.UtcNow - snapshot.Timestamp;
+        var ageText = age.TotalSeconds < 2
+            ? "gerade eben"
+            : $"vor {Math.Max(1, (int)age.TotalSeconds)} Sekunden";
+
+        PartnerStatus =
+            $"🟢 {snapshot.PlayerName} online\n" +
+            $"Spiel: {snapshot.Game}\n" +
+            $"{activeText}\n" +
+            $"Team: {snapshot.Party.Count}/6 · Gespeichert: {snapshot.StoredPokemonCount}\n" +
+            $"Aktualisiert: {ageText}";
+    }
+
+    private static NetworkPokemonSnapshot ToNetworkPokemon(
+        PokemonCardViewModel pokemon) => new()
+    {
+        SpeciesId = pokemon.SpeciesId,
+        SpeciesName = pokemon.Species,
+        Nickname = pokemon.DisplayName == pokemon.Species
+            ? string.Empty
+            : pokemon.DisplayName,
+        Level = pokemon.Level,
+        CurrentHp = pokemon.CurrentHp,
+        MaxHp = pokemon.MaxHp,
+        Location = pokemon.Subtitle
+    };
 
     private void ApplyLiveState(PlayerLiveState state)
     {
