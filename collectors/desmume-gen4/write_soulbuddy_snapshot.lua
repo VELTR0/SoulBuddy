@@ -4,6 +4,21 @@ local print_debug = require("print_debug")
 print_debug = print_debug(print_debug_messages)
 
 local json = require("dkjson")
+local PokemonModule = require("pokemon")
+
+local original_parse_gen4_gen5 = PokemonModule.parse_gen4_gen5
+
+function PokemonModule.parse_gen4_gen5(encrypted_words, in_box, gen)
+    local pokemon =
+        original_parse_gen4_gen5(encrypted_words, in_box, gen)
+
+    if pokemon ~= nil and pokemon.is_empty then
+        pokemon.data_str =
+            PokemonModule.get_words_string(encrypted_words)
+    end
+
+    return pokemon
+end
 
 local function get_script_directory()
     local source = debug.getinfo(1, "S").source
