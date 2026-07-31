@@ -5,10 +5,14 @@ print_debug = print_debug(print_debug_messages)
 
 local json = require("dkjson")
 
-local snapshot_file_path = "party.json"
+local runtime_directory =
+    "C:/Users/pasca/Documents/SoulBuddy/runtime"
+
+local snapshot_file_path =
+    runtime_directory .. "/party.json"
 
 local event_file_path =
-    "C:/Users/pasca/Documents/SoulBuddy/bin/Debug/net8.0/runtime/emulator-events.jsonl"
+    runtime_directory .. "/emulator-events.jsonl"
 
 local change_ids = { 0, 0, 0, 0, 0, 0 }
 local box_change_ids = {}
@@ -21,7 +25,16 @@ for box = 1, 18 do
     end
 end
 
+local function ensure_runtime_directory()
+    os.execute(
+        'if not exist "' .. runtime_directory ..
+        '" mkdir "' .. runtime_directory .. '"'
+    )
+end
+
 local function write_snapshot(request_body)
+    ensure_runtime_directory()
+
     local file, open_error = io.open(snapshot_file_path, "w")
 
     if file == nil then
@@ -39,6 +52,8 @@ local function write_snapshot(request_body)
 end
 
 local function append_event(event)
+    ensure_runtime_directory()
+
     local event_json = json.encode(event)
 
     if event_json == nil then
@@ -140,6 +155,8 @@ function write_file(request_body, generation, game_version, slots)
     end
 
     print("[SoulBuddy] Party update written.")
+    print("[SoulBuddy] Snapshot: " .. snapshot_file_path)
+    print("[SoulBuddy] Events: " .. event_file_path)
     print("[SoulBuddy] Updated slots: " .. tostring(#slots))
 
     return true
