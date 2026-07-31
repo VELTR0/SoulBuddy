@@ -153,13 +153,16 @@ function write_file(request_body, generation, game_version, slots)
     local pretty_print = string.gsub(request_body, "\n", "\r\n")
     print_debug(pretty_print)
 
-    if not write_snapshot(request_body) then
+    local is_box_update =
+        slots[1] ~= nil and slots[1].box ~= nil
+
+    if not is_box_update and not write_snapshot(request_body) then
         return false
     end
 
     local event = {
         protocolVersion = 1,
-        type = "party-update",
+        type = is_box_update and "box-update" or "party-update",
         timestamp = os.time(),
         generation = generation,
         game = game_version,
@@ -170,8 +173,15 @@ function write_file(request_body, generation, game_version, slots)
         return false
     end
 
-    print("[SoulBuddy] Party update written.")
-    print("[SoulBuddy] Snapshot: " .. snapshot_file_path)
+    print(
+        is_box_update
+            and "[SoulBuddy] Box update written."
+            or "[SoulBuddy] Party update written."
+    )
+
+    if not is_box_update then
+        print("[SoulBuddy] Snapshot: " .. snapshot_file_path)
+    end
     print("[SoulBuddy] Events: " .. event_file_path)
     print("[SoulBuddy] Updated slots: " .. tostring(#slots))
 
