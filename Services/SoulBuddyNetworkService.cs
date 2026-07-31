@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 
 namespace SoulBuddy.Services;
@@ -26,6 +27,9 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     private const int Port = 45831;
 
     private readonly object _sync = new();
+    private readonly SynchronizationContext? _synchronizationContext =
+        SynchronizationContext.Current;
+
     private CancellationTokenSource? _cancellationSource;
     private TcpListener? _listener;
     private TcpClient? _client;
@@ -65,11 +69,12 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         StopCurrentConnection();
 
         Mode = SoulBuddyNetworkMode.None;
-        State = SoulBuddyNetworkState.Idle;
         SessionId = string.Empty;
         PlayerName = string.Empty;
         RemotePlayerName = string.Empty;
-        SetStatus("Netzwerk noch nicht gestartet.", SoulBuddyNetworkState.Idle);
+        SetStatus(
+            "Netzwerk noch nicht gestartet.",
+            SoulBuddyNetworkState.Idle);
     }
 
     private void Prepare(
@@ -136,11 +141,16 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         _listener.Stop();
         _listener = null;
 
-        await CompleteHandshakeAsync(_client, isHost: true, cancellationToken);
+        await CompleteHandshakeAsync(
+            _client,
+            isHost: true,
+            cancellationToken);
+
         await KeepConnectionOpenAsync(_client, cancellationToken);
     }
 
-    private async Task JoinLocalhostAsync(CancellationToken cancellationToken)
+    private async Task JoinLocalhostAsync(
+        CancellationToken cancellationToken)
     {
         SetStatus(
             $"Verbinde mit Host auf diesem PC · Port {Port} …",
@@ -152,7 +162,11 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             Port,
             cancellationToken);
 
-        await CompleteHandshakeAsync(_client, isHost: false, cancellationToken);
+        await CompleteHandshakeAsync(
+            _client,
+            isHost: false,
+            cancellationToken);
+
         await KeepConnectionOpenAsync(_client, cancellationToken);
     }
 
@@ -162,11 +176,18 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var stream = client.GetStream();
+
         using var reader = new StreamReader(
             stream,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 1024,
             leaveOpen: true);
+
         using var writer = new StreamWriter(
             stream,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            bufferSize: 1024,
             leaveOpen: true)
         {
             AutoFlush = true
@@ -183,7 +204,10 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
 
         if (isHost)
         {
-            remoteHello = await ReadHelloAsync(reader, cancellationToken);
+            remoteHello = await ReadHelloAsync(
+                reader,
+                cancellationToken);
+
             await writer.WriteLineAsync(
                 JsonSerializer.Serialize(localHello));
         }
@@ -191,7 +215,10 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         {
             await writer.WriteLineAsync(
                 JsonSerializer.Serialize(localHello));
-            remoteHello = await ReadHelloAsync(reader, cancellationToken);
+
+            remoteHello = await ReadHelloAsync(
+                reader,
+                cancellationToken);
         }
 
         if (remoteHello.ProtocolVersion != 1)
@@ -280,7 +307,20 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             State = state;
         }
 
-        StatusChanged?.Invoke(this, EventArgs.Empty);
+        RaiseStatusChanged();
+    }
+
+    private void RaiseStatusChanged()
+    {
+        if (_synchronizationContext is null)
+        {
+            StatusChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        _synchronizationContext.Post(
+            _ => StatusChanged?.Invoke(this, EventArgs.Empty),
+            null);
     }
 
     private void StopCurrentConnection()
