@@ -10,23 +10,26 @@ namespace SoulBuddy.Services;
 
 internal static class MainWindowLayoutUpdater
 {
-    private static DispatcherTimer? _timer;
+    private static readonly HashSet<Window> AttachedWindows = [];
+    private static readonly HashSet<Window> UpdatingWindows = [];
+    private static DispatcherTimer? _windowDiscoveryTimer;
 
     [ModuleInitializer]
     internal static void Initialize()
     {
         Dispatcher.UIThread.Post(() =>
         {
-            _timer = new DispatcherTimer
+            _windowDiscoveryTimer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromMilliseconds(350)
+                Interval = TimeSpan.FromMilliseconds(500)
             };
-            _timer.Tick += (_, _) => UpdateOpenWindows();
-            _timer.Start();
+            _windowDiscoveryTimer.Tick += (_, _) => AttachOpenWindows();
+            _windowDiscoveryTimer.Start();
+            AttachOpenWindows();
         });
     }
 
-    private static void UpdateOpenWindows()
+    private static void AttachOpenWindows()
     {
         if (Application.Current?.ApplicationLifetime is not
             IClassicDesktopStyleApplicationLifetime desktop)
@@ -36,17 +39,54 @@ internal static class MainWindowLayoutUpdater
 
         foreach (var window in desktop.Windows)
         {
+            if (!AttachedWindows.Add(window))
+            {
+                continue;
+            }
+
+            window.LayoutUpdated += OnWindowLayoutUpdated;
+            window.Closed += (_, _) =>
+            {
+                window.LayoutUpdated -= OnWindowLayoutUpdated;
+                AttachedWindows.Remove(window);
+                UpdatingWindows.Remove(window);
+            };
+
+            UpdateWindow(window);
+        }
+    }
+
+    private static void OnWindowLayoutUpdated(object? sender, EventArgs eventArgs)
+    {
+        if (sender is Window window)
+        {
+            UpdateWindow(window);
+        }
+    }
+
+    private static void UpdateWindow(Window window)
+    {
+        if (!UpdatingWindows.Add(window))
+        {
+            return;
+        }
+
+        try
+        {
             UpdateMainContentColumns(window);
             UpdatePartyGrid(window);
             StackPartyHpBelowLevel(window);
             HideStoredPokemonHp(window);
         }
+        finally
+        {
+            UpdatingWindows.Remove(window);
+        }
     }
 
     private static void UpdateMainContentColumns(Window window)
     {
-        var storedHeader = FindHeader(window, "Gespeicherte Pokémon");
-        var storedSection = FindSectionGrid(storedHeader);
+        var storedSection = FindSection(window, "Gespeicherte Pokémon");
         var storedCard = storedSection?
             .GetVisualAncestors()
             .OfType<Border>()
@@ -57,25 +97,16 @@ internal static class MainWindowLayoutUpdater
             .OfType<Grid>()
             .FirstOrDefault(grid => grid.ColumnDefinitions.Count == 3);
 
-        if (contentGrid is null)
+        if (contentGrid is not null)
         {
-            return;
+            contentGrid.ColumnDefinitions =
+                new ColumnDefinitions("2.05*,0.78*,1.1*");
         }
-
-        // Die gespeicherte Liste bleibt kompakt, erhält aber etwas mehr Platz
-        // für Namen und Fangorte als in der vorherigen Fassung.
-        contentGrid.ColumnDefinitions =
-            new ColumnDefinitions("2.05*,0.78*,1.1*");
     }
 
     private static void UpdatePartyGrid(Window window)
     {
-        var partyHeader = FindHeader(window, "Aktuelles Team");
-        var partySection = FindSectionGrid(partyHeader);
-        var partyGrid = partySection?.Children
-            .OfType<Grid>()
-            .FirstOrDefault(grid => Grid.GetRow(grid) == 1);
-
+        var partyGrid = FindPartyGrid(window);
         if (partyGrid is null)
         {
             return;
@@ -96,12 +127,7 @@ internal static class MainWindowLayoutUpdater
 
     private static void StackPartyHpBelowLevel(Window window)
     {
-        var partyHeader = FindHeader(window, "Aktuelles Team");
-        var partySection = FindSectionGrid(partyHeader);
-        var partyGrid = partySection?.Children
-            .OfType<Grid>()
-            .FirstOrDefault(grid => Grid.GetRow(grid) == 1);
-
+        var partyGrid = FindPartyGrid(window);
         if (partyGrid is null)
         {
             return;
@@ -116,7 +142,7 @@ internal static class MainWindowLayoutUpdater
                 .OfType<Grid>()
                 .FirstOrDefault(grid => grid.Children.Contains(progressBar));
 
-            if (hpGrid is null || hpGrid.Children.Count < 3)
+            if (hpGrid is null)
             {
                 continue;
             }
@@ -133,6 +159,10 @@ internal static class MainWindowLayoutUpdater
             {
                 continue;
             }
+
+            // Team-KP werden niemals ausgeblendet.
+            progressBar.IsVisible = true;
+            hpText.IsVisible = true;
 
             hpGrid.ColumnDefinitions = new ColumnDefinitions("*");
             hpGrid.RowDefinitions = new RowDefinitions("Auto,Auto,Auto");
@@ -155,8 +185,7 @@ internal static class MainWindowLayoutUpdater
 
     private static void HideStoredPokemonHp(Window window)
     {
-        var storedHeader = FindHeader(window, "Gespeicherte Pokémon");
-        var storedSection = FindSectionGrid(storedHeader);
+        var storedSection = FindSection(window, "Gespeicherte Pokémon");
         var scrollViewer = storedSection?.Children
             .OfType<ScrollViewer>()
             .FirstOrDefault(viewer => Grid.GetRow(viewer) == 1);
@@ -175,24 +204,29 @@ internal static class MainWindowLayoutUpdater
 
         foreach (var text in scrollViewer
                      .GetVisualDescendants()
-                     .OfType<TextBlock>())
+                     .OfType<TextBlock>()
+                     .Where(text => IsHpText(text.Text)))
         {
-            if (IsHpText(text.Text))
-            {
-                text.IsVisible = false;
-            }
+            text.IsVisible = false;
         }
     }
 
-    private static TextBlock? FindHeader(Window window, string title) =>
-        window
+    private static Grid? FindPartyGrid(Window window)
+    {
+        var partySection = FindSection(window, "Aktuelles Team");
+        return partySection?.Children
+            .OfType<Grid>()
+            .FirstOrDefault(grid => Grid.GetRow(grid) == 1);
+    }
+
+    private static Grid? FindSection(Window window, string title)
+    {
+        var header = window
             .GetVisualDescendants()
             .OfType<TextBlock>()
             .FirstOrDefault(text =>
                 string.Equals(text.Text, title, StringComparison.Ordinal));
 
-    private static Grid? FindSectionGrid(TextBlock? header)
-    {
         if (header is null)
         {
             return null;
@@ -201,8 +235,10 @@ internal static class MainWindowLayoutUpdater
         return header
             .GetVisualAncestors()
             .OfType<Grid>()
-            .Skip(1)
-            .FirstOrDefault();
+            .FirstOrDefault(grid =>
+                grid.RowDefinitions.Count == 2 &&
+                grid.Children.OfType<Grid>().Any() ||
+                grid.Children.OfType<ScrollViewer>().Any());
     }
 
     private static bool IsHpText(string? value)
@@ -213,7 +249,6 @@ internal static class MainWindowLayoutUpdater
             return false;
         }
 
-        var slashIndex = value.IndexOf('/');
-        return slashIndex > 0;
+        return value.IndexOf('/') > 0;
     }
 }
