@@ -36,7 +36,7 @@ local function object_assign(...)
         for key, val in pairs(o) do
             if obj[key] == nil or type(val) ~= "table" then
                 obj[key] = val
-            else -- val is table that should merge with current obj[key]
+            else
                 obj[key] = object_assign(obj[key], val)
             end
         end
@@ -49,7 +49,6 @@ local Pokemon = {}
 
 local _defaultPokemonValues = {
     data_str = "",
-
     pid = -1,
     otid = -1,
     otsid = -1,
@@ -60,7 +59,6 @@ local _defaultPokemonValues = {
     is_genderless = false,
     gender = false,
     held_item = "",
-
     species = -1,
     species_name = "",
     alternate_form = "",
@@ -80,196 +78,68 @@ local _defaultPokemonValues = {
     evs = nil,
     ivs = nil,
     hp = nil,
-
     type1 = "",
     type2 = "",
-
-    --moves = nil,
     move1 = nil,
     move2 = nil,
     move3 = nil,
     move4 = nil,
-
     is_active_in_battle = false,
 }
 
---indexed by generation
 local _propertiesToSend = {
     [1] = {
-        pid = "pid",
-        species = "species",
-        species_name = "speciesName",
-        nickname = "nickname",
-
-        is_female = "is_female",
-
-        exp = "exp",
-        level = "level",
-        hp = "hp",
-        evs = "evs",
-
-        move1 = "move1",
-        move2 = "move2",
-        move3 = "move3",
-        move4 = "move4",
-
-        status = "status",
+        pid = "pid", species = "species", species_name = "speciesName", nickname = "nickname",
+        is_female = "is_female", exp = "exp", level = "level", hp = "hp", evs = "evs",
+        move1 = "move1", move2 = "move2", move3 = "move3", move4 = "move4", status = "status",
     },
     [2] = {
-        pid = "pid",
-        species = "species",
-        species_name = "speciesName",
-        nickname = "nickname",
-        held_item = "heldItem",
-
-        is_female = "is_female",
-
-        exp = "exp",
-        level = "level",
-        hp = "hp",
-        evs = "evs",
-
-        move1 = "move1",
-        move2 = "move2",
-        move3 = "move3",
-        move4 = "move4",
-
-        status = "status",
+        pid = "pid", species = "species", species_name = "speciesName", nickname = "nickname",
+        held_item = "heldItem", is_female = "is_female", exp = "exp", level = "level",
+        hp = "hp", evs = "evs", move1 = "move1", move2 = "move2", move3 = "move3",
+        move4 = "move4", status = "status",
     },
     [3] = {
-        pid = "pid",
-        species = "species",
-        speciesName = "speciesName",
-        nickname = "nickname",
-        held_item = "heldItem",
-        exp = "exp",
-        level = "level",
-        is_female = "isFemale",
-        is_genderless = "isGenderless",
-        is_shiny = "isShiny",
-        is_egg = "isEgg",
-        hp = "hp",
-        location_met = "locationMet",
-        level_met = "levelMet",
-        evs = "evs",
-        ivs = "ivs",
-        ability = "ability",
-        nature = "nature",
-        hiddenpower = "hiddenpower",
-        friendship = "friendship",
-        pokeball = "pokeball",
-        -- moves = "moves",
-
-        type1 = "type1",
-        type2 = "type2",
-        move1 = "move1",
-        move2 = "move2",
-        move3 = "move3",
-        move4 = "move4",
-        pokerus = "pokerus",
-        status = "status",
-        is_active_in_battle = "is_active_in_battle"
+        pid = "pid", species = "species", speciesName = "speciesName", nickname = "nickname",
+        held_item = "heldItem", exp = "exp", level = "level", is_female = "isFemale",
+        is_genderless = "isGenderless", is_shiny = "isShiny", is_egg = "isEgg", hp = "hp",
+        location_met = "locationMet", level_met = "levelMet", evs = "evs", ivs = "ivs",
+        ability = "ability", nature = "nature", hiddenpower = "hiddenpower", friendship = "friendship",
+        pokeball = "pokeball", type1 = "type1", type2 = "type2", move1 = "move1",
+        move2 = "move2", move3 = "move3", move4 = "move4", pokerus = "pokerus",
+        status = "status", is_active_in_battle = "is_active_in_battle"
     },
     [4] = {
-        pid = { name = "pid", transform = unsign },
-        species = "species",
-        species_name = "speciesName",
-        nickname = "nickname",
-        held_item = "heldItem",
-        exp = "exp",
-        level = "level",
-        is_female = "isFemale",
-        is_genderless = "isGenderless",
-        is_shiny = "isShiny",
-        is_egg = "isEgg",
-        hp = "hp",
-        platinum_location_met = "locationMet",
-        level_met = "levelMet",
-        evs = "evs",
-        ivs = "ivs",
-        ability = "ability",
-        nature = "nature",
-        hiddenpower = "hiddenpower",
-        --moves = "moves",
-        move1 = "move1",
-        move2 = "move2",
-        move3 = "move3",
-        move4 = "move4",
-        pokeball = "pokeball",
-
-        pokerus = "pokerus",
-        status = "status",
-        otsid = "otsid",
-        otid = "otid",
-        platinum_egg_location_met = "eggLocationMet",
-        alternate_form = "alternateForm",
-        alternate_form_id = "alternateFormId",
-        encounter_type = "encounterType",
-        markings = "markings",
+        pid = { name = "pid", transform = unsign }, species = "species", species_name = "speciesName",
+        nickname = "nickname", held_item = "heldItem", exp = "exp", level = "level",
+        is_female = "isFemale", is_genderless = "isGenderless", is_shiny = "isShiny",
+        is_egg = "isEgg", hp = "hp", platinum_location_met = "locationMet",
+        level_met = "levelMet", evs = "evs", ivs = "ivs", ability = "ability",
+        nature = "nature", hiddenpower = "hiddenpower", move1 = "move1", move2 = "move2",
+        move3 = "move3", move4 = "move4", pokeball = "pokeball", pokerus = "pokerus",
+        status = "status", otsid = "otsid", otid = "otid",
+        platinum_egg_location_met = "eggLocationMet", alternate_form = "alternateForm",
+        alternate_form_id = "alternateFormId", encounter_type = "encounterType", markings = "markings",
         is_gift = "gift",
-        friendship = {
-            name = "friendship",
-            transform = function (egg_cycles, pkmn) return pkmn.friendship end
-        },
-        egg_steps = {
-            name = "eggCycles",
-            transform = function (egg_cycles, pkmn) return pkmn.is_egg and egg_cycles or nil end
-        }
+        friendship = { name = "friendship", transform = function (egg_cycles, pkmn) return pkmn.friendship end },
+        egg_steps = { name = "eggCycles", transform = function (egg_cycles, pkmn) return pkmn.is_egg and egg_cycles or nil end }
     },
     [5] = {
-        pid = { name = "pid", transform = unsign },
-        species = "species",
-        species_name = "speciesName",
-        nickname = "nickname",
-        held_item = "heldItem",
-        exp = "exp",
-        level = "level",
-        is_female = "isFemale",
-        is_genderless = "isGenderless",
-        is_shiny = "isShiny",
-        is_egg = "isEgg",
-        hp = "hp",
-        diamond_pearl_location_met = "locationMet",
-        level_met = "levelMet",
-        evs = "evs",
-        ivs = "ivs",
-        ability = "ability",
-        nature = "nature",
-        hiddenpower = "hiddenpower",
-        --moves = "moves",
-        move1 = "move1",
-        move2 = "move2",
-        move3 = "move3",
-        move4 = "move4",
-        pokeball = "pokeball",
-
-        pokerus = "pokerus",
-        status = "status",
-        otsid = "otsid",
-        otid = "otid",
-        diamond_pearl_egg_location_met = "eggLocationMet",
-        alternate_form = "alternateForm",
-        alternate_form_id = "alternateFormId",
-        encounter_type = "encounterType",
-        markings = "markings",
+        pid = { name = "pid", transform = unsign }, species = "species", species_name = "speciesName",
+        nickname = "nickname", held_item = "heldItem", exp = "exp", level = "level",
+        is_female = "isFemale", is_genderless = "isGenderless", is_shiny = "isShiny",
+        is_egg = "isEgg", hp = "hp", diamond_pearl_location_met = "locationMet",
+        level_met = "levelMet", evs = "evs", ivs = "ivs", ability = "ability",
+        nature = "nature", hiddenpower = "hiddenpower", move1 = "move1", move2 = "move2",
+        move3 = "move3", move4 = "move4", pokeball = "pokeball", pokerus = "pokerus",
+        status = "status", otsid = "otsid", otid = "otid",
+        diamond_pearl_egg_location_met = "eggLocationMet", alternate_form = "alternateForm",
+        alternate_form_id = "alternateFormId", encounter_type = "encounterType", markings = "markings",
         is_gift = "gift",
-        friendship = {
-            name = "friendship",
-            transform = function (egg_cycles, pkmn) return pkmn.friendship end
-        },
-        egg_steps = {
-            name = "eggCycles",
-            transform = function (egg_cycles, pkmn) return pkmn.is_egg and egg_cycles or nil end
-        }
+        friendship = { name = "friendship", transform = function (egg_cycles, pkmn) return pkmn.friendship end },
+        egg_steps = { name = "eggCycles", transform = function (egg_cycles, pkmn) return pkmn.is_egg and egg_cycles or nil end }
     }
 }
-
--- if gv[3] == 1 then
---     table.remove(_propertiesToSend, "platinum_location_met")
---     table.remove(_propertiesToSend, "platinum_egg_location_met")
---     _propertiesToSend["diamond_pearl_location_met"] = "locationMet"
---     _propertiesToSend["diamond_pearl_egg_location_met"] = "eggLocationMet"
--- end
 
 function Pokemon.get_words_string(words, format)
     format = format or "%04x"
@@ -280,9 +150,6 @@ function Pokemon.get_words_string(words, format)
     return hex
 end
 
--- returns
--- 1) the value to set current hp at 0
--- 2) the value to set the pokemon to frozen
 function Pokemon.get_death_codes(pid)
     local prng = pid
     prng = mult32(prng,0x41C64E6D) + 0x6073
@@ -298,20 +165,15 @@ function Pokemon.parse_gen4_gen5(encrypted_words, in_box, gen)
     pkmn.data_str = Pokemon.get_words_string(encrypted_words)
 
     local valid, words, death_code = decrypt(encrypted_words)
+    pkmn.valid = valid
 
-    pkmn.valid = valid -- currently pointless code but I may use it in the future
     if not valid then
         return nil
     end
 
     if words == nil then
-        -- empty slot
         return Pokemon()
     end
-
-    -- print("----------------")
-    -- print(Pokemon.get_words_string(words))
-    -- print("----------------")
 
     for _, fn in ipairs(pokemon_memory_map) do
         local attr
@@ -319,31 +181,36 @@ function Pokemon.parse_gen4_gen5(encrypted_words, in_box, gen)
         if type(fn) == "number" then
             pkmn[attr] = words[fn]
         else
-            -- print(attr)
             pkmn[attr] = fn(words, pkmn)
         end
     end
 
     pkmn.death_code = death_code
 
-    for _, fn in ipairs(battle_stats_memory_map) do
-        local attr
-        attr, fn = unpack(fn)
-        if type(fn) == "number" then
-            pkmn[attr] = words[fn]
-        else
-            -- print(attr)
-            pkmn[attr] = fn(words, pkmn)
+    if in_box then
+        pkmn.level = pkmn.level or 0
+        pkmn.current_hp = 1
+        pkmn.max_hp = 1
+        pkmn.hp = { current = 1, max = 1 }
+        pkmn.living = true
+    else
+        for _, fn in ipairs(battle_stats_memory_map) do
+            local attr
+            attr, fn = unpack(fn)
+            if type(fn) == "number" then
+                pkmn[attr] = words[fn]
+            else
+                pkmn[attr] = fn(words, pkmn)
+            end
         end
-    end
 
-    -- best effort to determine that this battle data is not accurate
-    -- Blissey has the highest HP base stat, and at level 100, has a maximum max_hp of 714
-    if pkmn.level > 100 or pkmn.max_hp > 714 or pkmn.current_hp > 714 or pkmn.current_hp > pkmn.max_hp then
-        return nil
-    end
+        if pkmn.level > 100 or pkmn.max_hp > 714 or
+           pkmn.current_hp > 714 or pkmn.current_hp > pkmn.max_hp then
+            return nil
+        end
 
-    pkmn.living = pkmn.current_hp > 0
+        pkmn.living = pkmn.current_hp > 0
+    end
 
     return Pokemon(pkmn)
 end
@@ -356,10 +223,7 @@ function Pokemon:update_hp(currentHp, maxHp)
     self.max_hp = maxHp
     self.currentHp = currentHp
     self.living = self.currentHp > 0
-    self.hp = {
-        current = currentHp,
-        max = maxHp,
-    }
+    self.hp = { current = currentHp, max = maxHp }
     return self
 end
 
@@ -367,7 +231,6 @@ function Pokemon:__call(init)
     if init ~= nil then init.is_empty = false end
     init = init or {}
     init = object_assign(_defaultPokemonValues, init)
-
     setmetatable(init, self)
     self.__index = self
     return init
@@ -379,25 +242,16 @@ function Pokemon.__eq(left, right)
     for k, v in pairs(_propertiesToSend[left.gen]) do
         if type(v) == "table" then
             local tmpL, tmpR = left[k], right[k]
-
             if v.transform ~= nil then
                 tmpL, tmpR = v.transform(tmpL, left), v.transform(tmpR, right)
             end
-
-            if tmpL ~= tmpR then
-                -- print(string.format("%s: %s -> %s", k, tostring(tmpL), tostring(tmpR)))
-                return false
-            end
+            if tmpL ~= tmpR then return false end
         else
-            -- assumes only 1-dimensional tables
-            if (type(left[k]) == "table") then
+            if type(left[k]) == "table" then
                 for i, val in pairs(left[k]) do
-                    if right[k][i] ~= val then
-                        return false
-                    end
+                    if right[k][i] ~= val then return false end
                 end
             elseif left[k] ~= right[k] then
-                -- print(string.format("%s: %s -> %s", k, tostring(left[k]), tostring(right[k])))
                 return false
             end
         end
@@ -413,7 +267,6 @@ function Pokemon:__tostring()
             strs[#strs + 1] = string.format("%s = %s", k, type(v) == "string" and string.format([["%s"]], v) or tostring(v))
         end
     end
-
     return string.format("{ %s }", table.concat(strs, ", "))
 end
 
@@ -428,23 +281,12 @@ function Pokemon:toJsonSerializableTable(generation)
 
     local jsonTable = {}
     for k, v in pairs(_propertiesToSend[self.gen]) do
-        --print("-----------------------")
-        --print(k)
         if type(v) == "table" then
             local tmpV = self[k]
-
-            if v.transform ~= nil then
-                tmpV = v.transform(tmpV, self)
-            end
-
-            if v.format ~= nil then
-                tmpV = string.format(v.format, tmpV)
-            end
-
+            if v.transform ~= nil then tmpV = v.transform(tmpV, self) end
+            if v.format ~= nil then tmpV = string.format(v.format, tmpV) end
             jsonTable[v.name] = tmpV
         else
-            --print(v)
-            --print(self[k])
             jsonTable[v] = self[k]
         end
     end
