@@ -42,9 +42,9 @@ local prev = {}
 
 local leftarrow1color, rightarrow1color, leftarrow2color, rightarrow2color
 
-local last_boxes = {}
-for i = 1, 18 do
-    last_boxes[i] = nil
+local last_box_fingerprints = {}
+for box = 1, 18 do
+    last_box_fingerprints[box] = {}
 end
 
 local last_box_check_time = 0
@@ -269,6 +269,31 @@ function read_pokemon_words(addr, num_words)
     return words
 end
 
+local function read_box_words_and_fingerprint(addr)
+    local bytes = memory.readbyterange(addr, box_slot_size)
+    local fingerprint_parts = {}
+
+    for i = 1, #bytes do
+        fingerprint_parts[i] = string.format("%02x", bytes[i])
+    end
+
+    local pid = bytes[1]
+        + lshift(bytes[2], 8)
+        + lshift(bytes[3], 16)
+        + lshift(bytes[4], 24)
+
+    local words = {
+        getbits(pid, 16, 16),
+        getbits(pid, 0, 16)
+    }
+
+    for i = 5, #bytes, 2 do
+        words[#words + 1] = bytes[i] + lshift(bytes[i + 1], 8)
+    end
+
+    return words, table.concat(fingerprint_parts)
+end
+
 function check_gen5_in_battle(baseBattleAddr)
     btl_pokeparamAddr = baseBattleAddr - 0x26
     bytes = memory.readbyterange(btl_pokeparamAddr, 15)
@@ -318,31 +343,42 @@ function inspect_and_send_boxes()
     end
 
     local changed_slots = {}
-    for box = box_id_to_check, end_box_id do
-        local previous_box = last_boxes[box] or {}
-        local current_box = {}
-        for box_slot = 1, 30 do
-            local address = box_offset + (box - 1) * box_size + (box_slot - 1) * box_slot_size
-            local words = read_pokemon_words(address, Pokemon.word_size_in_box)
-            local data_str = Pokemon.get_words_string(words)
-            local previous = previous_box[box_slot]
 
-            if previous == nil or previous.data_str ~= data_str then
+    for box = box_id_to_check, end_box_id do
+        local fingerprints = last_box_fingerprints[box]
+
+        for box_slot = 1, 30 do
+            local address = box_offset
+                + (box - 1) * box_size
+                + (box_slot - 1) * box_slot_size
+
+            local words, fingerprint =
+                read_box_words_and_fingerprint(address)
+
+            local previous_fingerprint = fingerprints[box_slot]
+
+            if previous_fingerprint == nil or
+               previous_fingerprint ~= fingerprint then
                 local parsed = Pokemon.parse_gen4_gen5(words, true, gen)
-                current_box[box_slot] = parsed or Pokemon()
-                changed_slots[#changed_slots + 1] = {
-                    box_id = box,
-                    slot_id = box_slot,
-                    pokemon = current_box[box_slot]
-                }
-            else
-                current_box[box_slot] = previous
+                local pokemon = parsed or Pokemon()
+
+                fingerprints[box_slot] = fingerprint
+
+                -- Empty slots do not need to be transmitted during the
+                -- initial scan. A later transition to empty still does.
+                if previous_fingerprint ~= nil or not pokemon.is_empty then
+                    changed_slots[#changed_slots + 1] = {
+                        box_id = box,
+                        slot_id = box_slot,
+                        pokemon = pokemon
+                    }
+                end
             end
         end
-        last_boxes[box] = current_box
     end
 
-    if #changed_slots > 0 and not send_slots(changed_slots, gen, game, subgame) then
+    if #changed_slots > 0 and
+       not send_slots(changed_slots, gen, game, subgame) then
         print("[SoulBuddy] Failed to write box updates.")
         return false
     end
