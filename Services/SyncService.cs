@@ -77,9 +77,10 @@ public sealed class SyncService
     private async Task SynchronizeOnceAsync(
         CancellationToken cancellationToken)
     {
-        var party = await _partySource.ReadPartyAsync(cancellationToken);
+        var pokemonSlots =
+            await _partySource.ReadAllPokemonAsync(cancellationToken);
 
-        foreach (var slot in party)
+        foreach (var slot in pokemonSlots)
         {
             var pokemon = slot.Pokemon;
 
