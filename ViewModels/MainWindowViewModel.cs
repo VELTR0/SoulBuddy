@@ -18,6 +18,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private string _pokemonCountText = "0 Pokémon";
     private string _detailsTitle = "Kein Pokémon ausgewählt";
     private string _detailsText = "Wähle ein Pokémon aus, um seine Details anzuzeigen.";
+    private string _liveEncounterTitle = "LIVE ENCOUNTER";
+    private string _liveEncounterText = "Warte auf Live-Daten aus dem Emulator …";
 
     public MainWindowViewModel()
     {
@@ -67,6 +69,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         private set => SetProperty(ref _detailsText, value);
     }
 
+    public string LiveEncounterTitle
+    {
+        get => _liveEncounterTitle;
+        private set => SetProperty(ref _liveEncounterTitle, value);
+    }
+
+    public string LiveEncounterText
+    {
+        get => _liveEncounterText;
+        private set => SetProperty(ref _liveEncounterText, value);
+    }
+
     public async Task InitializeAsync()
     {
         try
@@ -114,9 +128,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                 CancellationToken.None);
             var stored = await _runtime.KnownPokemonStore.GetAllAsync(
                 CancellationToken.None);
+            var liveState = _runtime.PlayerLiveStateSource.Read();
 
             ReplaceItems(Party, CreatePartyCards(party));
             ReplaceItems(StoredPokemon, CreateStoredCards(stored));
+            UpdateLiveEncounter(liveState, party);
 
             PartyCountText = $"{Party.Count} / 6";
             PokemonCountText = $"{StoredPokemon.Count} Pokémon";
@@ -132,6 +148,91 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             _refreshInProgress = false;
         }
     }
+
+    private void UpdateLiveEncounter(
+        PlayerLiveState state,
+        IReadOnlyList<PartySlot> party)
+    {
+        var ownPokemon = state.ActivePokemon;
+
+        if (ownPokemon is null)
+        {
+            var fallback = party
+                .Where(slot => slot.Pokemon is not null)
+                .OrderBy(slot => slot.SlotId)
+                .Select(slot => slot.Pokemon!)
+                .FirstOrDefault(pokemon => pokemon.Hp.Current > 0);
+
+            if (fallback is not null)
+            {
+                ownPokemon = new LivePokemonState
+                {
+                    SpeciesId = fallback.Species,
+                    SpeciesName = fallback.SpeciesName,
+                    Nickname = fallback.Nickname,
+                    Level = fallback.Level,
+                    CurrentHp = fallback.Hp.Current,
+                    MaxHp = fallback.Hp.Max
+                };
+            }
+        }
+
+        var location = string.IsNullOrWhiteSpace(state.LocationName)
+            ? state.LocationId is null
+                ? "Aufenthaltsort wird ermittelt"
+                : $"Unbekannter Ort ({state.LocationId})"
+            : state.LocationName;
+
+        if (!state.InBattle)
+        {
+            LiveEncounterTitle = "LIVE · AUSSERHALB DES KAMPFES";
+            LiveEncounterText = $"📍 {location}";
+            return;
+        }
+
+        var kind = state.BattleKind switch
+        {
+            "trainer" => string.IsNullOrWhiteSpace(state.TrainerName)
+                ? "Trainerkampf"
+                : $"Trainerkampf · {state.TrainerName}",
+            "wild" => "Wilder Kampf",
+            _ => "Kampf erkannt · Typ wird geprüft"
+        };
+
+        var lines = new List<string>
+        {
+            $"⚔ {kind}",
+            $"📍 {location}"
+        };
+
+        if (state.Opponent is not null)
+        {
+            lines.Add(
+                $"Gegner: {DisplayPokemonName(state.Opponent)} · " +
+                $"Lv. {state.Opponent.Level} · " +
+                $"{state.Opponent.CurrentHp}/{state.Opponent.MaxHp} KP");
+        }
+        else
+        {
+            lines.Add("Gegner: wird ermittelt …");
+        }
+
+        if (ownPokemon is not null)
+        {
+            lines.Add(
+                $"Aktiv: {DisplayPokemonName(ownPokemon)} · " +
+                $"Lv. {ownPokemon.Level} · " +
+                $"{ownPokemon.CurrentHp}/{ownPokemon.MaxHp} KP");
+        }
+
+        LiveEncounterTitle = "LIVE ENCOUNTER";
+        LiveEncounterText = string.Join(Environment.NewLine, lines);
+    }
+
+    private static string DisplayPokemonName(LivePokemonState pokemon) =>
+        string.IsNullOrWhiteSpace(pokemon.Nickname)
+            ? pokemon.SpeciesName
+            : pokemon.Nickname;
 
     private IEnumerable<PokemonCardViewModel> CreatePartyCards(
         IReadOnlyList<PartySlot> party)
