@@ -172,7 +172,7 @@ function Pokemon.parse_gen4_gen5(encrypted_words, in_box, gen)
     end
 
     if words == nil then
-        return Pokemon()
+        return Pokemon({ gen = gen, data_str = pkmn.data_str, is_empty = true })
     end
 
     for _, fn in ipairs(pokemon_memory_map) do
@@ -228,9 +228,10 @@ function Pokemon:update_hp(currentHp, maxHp)
 end
 
 function Pokemon:__call(init)
-    if init ~= nil then init.is_empty = false end
+    local has_values = init ~= nil
     init = init or {}
     init = object_assign(_defaultPokemonValues, init)
+    if has_values and init.is_empty == nil then init.is_empty = false end
     setmetatable(init, self)
     self.__index = self
     return init
