@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -92,8 +93,12 @@ internal static class ResizableMainColumns
             return false;
         }
 
+        cards[0].MinWidth = 300;
+        cards[1].MinWidth = 180;
+        cards[2].MinWidth = 260;
+
         contentGrid.ColumnDefinitions = new ColumnDefinitions(
-            "MinMax(300,2.15*),8,MinMax(180,0.62*),8,MinMax(260,1.1*)");
+            "2.15*,8,0.62*,8,1.1*");
         contentGrid.ColumnSpacing = 0;
 
         Grid.SetColumn(cards[0], 0);
@@ -121,7 +126,7 @@ internal static class ResizableMainColumns
         Background = Brushes.Transparent,
         Cursor = new Cursor(StandardCursorType.SizeWestEast),
         Margin = new Thickness(1, 8),
-        Template = new FuncControlTemplate<GridSplitter>((splitter, _) =>
+        Template = new FuncControlTemplate<GridSplitter>((_, _) =>
             new Border
             {
                 Width = 4,
