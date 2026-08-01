@@ -94,8 +94,7 @@ internal static class InternetConnectionUi
             Background = Brush("#0F1829"),
             Foreground = Brush("#F8FAFC"),
             BorderBrush = Brush("#334E8A"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6)
+            BorderThickness = new Thickness(1)
         };
         addressBox.TextChanged += (_, _) =>
         {
