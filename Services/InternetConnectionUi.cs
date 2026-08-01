@@ -81,6 +81,7 @@ internal static class InternetConnectionUi
 
         MergeSessionAndLocalPlayerCards(partnerStack);
         ArrangePartnerNetworkArea(partnerStack, buttonGrid);
+        MoveNetworkCardIntoHeader(window, partnerStack);
         return true;
     }
 
@@ -154,7 +155,7 @@ internal static class InternetConnectionUi
 
         var statusPanel = new StackPanel
         {
-            Spacing = 5,
+            Spacing = 4,
             VerticalAlignment = VerticalAlignment.Top,
             MinWidth = 0
         };
@@ -192,7 +193,7 @@ internal static class InternetConnectionUi
 
         var controlsPanel = new StackPanel
         {
-            Spacing = 6,
+            Spacing = 5,
             VerticalAlignment = VerticalAlignment.Top,
             MinWidth = 0
         };
@@ -211,7 +212,7 @@ internal static class InternetConnectionUi
         var layout = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("1*,Auto,1.35*"),
-            ColumnSpacing = 12,
+            ColumnSpacing = 10,
             MinWidth = 0
         };
         layout.Children.Add(statusPanel);
@@ -221,6 +222,59 @@ internal static class InternetConnectionUi
         layout.Children.Add(controlsPanel);
 
         partnerStack.Children.Add(layout);
+    }
+
+    private static void MoveNetworkCardIntoHeader(
+        Window window,
+        StackPanel partnerStack)
+    {
+        var partnerCard = partnerStack
+            .GetVisualAncestors()
+            .OfType<Border>()
+            .FirstOrDefault(border => ReferenceEquals(border.Child, partnerStack));
+        var sessionGrid = partnerCard?
+            .GetVisualAncestors()
+            .OfType<Grid>()
+            .FirstOrDefault(grid => grid.Children.Contains(partnerCard));
+
+        var phaseText = window
+            .GetVisualDescendants()
+            .OfType<TextBlock>()
+            .FirstOrDefault(text =>
+                string.Equals(text.Text, "PHASE 3C", StringComparison.Ordinal));
+        var phaseBadge = phaseText?
+            .GetVisualAncestors()
+            .OfType<Border>()
+            .FirstOrDefault(border => ReferenceEquals(border.Child, phaseText));
+        var headerGrid = phaseBadge?
+            .GetVisualAncestors()
+            .OfType<Grid>()
+            .FirstOrDefault(grid => grid.Children.Contains(phaseBadge));
+
+        if (partnerCard is null || sessionGrid is null ||
+            phaseBadge is null || headerGrid is null)
+        {
+            return;
+        }
+
+        var sessionCard = sessionGrid.Children
+            .OfType<Border>()
+            .FirstOrDefault(card => !ReferenceEquals(card, partnerCard));
+
+        sessionGrid.Children.Remove(partnerCard);
+        sessionGrid.ColumnDefinitions = new ColumnDefinitions("*");
+        if (sessionCard is not null)
+        {
+            Grid.SetColumn(sessionCard, 0);
+        }
+
+        headerGrid.Children.Remove(phaseBadge);
+        headerGrid.ColumnDefinitions = new ColumnDefinitions("0.55*,1.45*");
+
+        partnerCard.Margin = new Thickness(16, 0, 0, 0);
+        partnerCard.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(partnerCard, 1);
+        headerGrid.Children.Add(partnerCard);
     }
 
     private static SolidColorBrush Brush(string color) =>
