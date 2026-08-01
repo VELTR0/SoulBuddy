@@ -214,9 +214,15 @@ internal static class InternetConnectionUi
             return;
         }
 
+        // Detach the contents before reusing them in the combined header card.
         sessionCard.Child = null;
         localCard.Child = null;
         partnerCard.Child = null;
+
+        // Remove the old cards from their original parent before reparenting.
+        sessionGrid.Children.Remove(sessionCard);
+        sessionGrid.Children.Remove(localCard);
+        sessionGrid.Children.Remove(partnerCard);
 
         var sessionSeparator = VerticalSeparator();
         var playerSeparator = VerticalSeparator();
@@ -247,6 +253,7 @@ internal static class InternetConnectionUi
         sessionCard.Child = statusLayout;
         sessionCard.Margin = new Thickness(16, 0, 0, 0);
         sessionCard.VerticalAlignment = VerticalAlignment.Center;
+        sessionCard.HorizontalAlignment = HorizontalAlignment.Stretch;
 
         headerGrid.Children.Remove(phaseBadge);
         headerGrid.ColumnDefinitions = new ColumnDefinitions("0.42*,1.58*");
@@ -254,6 +261,7 @@ internal static class InternetConnectionUi
         headerGrid.Children.Add(sessionCard);
 
         sessionGrid.IsVisible = false;
+        sessionGrid.Height = 0;
         sessionGrid.Margin = new Thickness(0);
     }
 
