@@ -79,64 +79,9 @@ internal static class InternetConnectionUi
             return false;
         }
 
-        MergeSessionAndLocalPlayerCards(partnerStack);
         ArrangePartnerNetworkArea(partnerStack, buttonGrid);
-        MoveNetworkCardIntoHeader(window, partnerStack);
+        MoveAllStatusCardsIntoHeader(window, partnerStack);
         return true;
-    }
-
-    private static void MergeSessionAndLocalPlayerCards(StackPanel partnerStack)
-    {
-        var partnerCard = partnerStack
-            .GetVisualAncestors()
-            .OfType<Border>()
-            .FirstOrDefault(border => ReferenceEquals(border.Child, partnerStack));
-        var sessionGrid = partnerCard?
-            .GetVisualAncestors()
-            .OfType<Grid>()
-            .FirstOrDefault(grid =>
-                grid.ColumnDefinitions.Count == 3 &&
-                grid.Children.Contains(partnerCard));
-
-        if (partnerCard is null || sessionGrid is null)
-        {
-            return;
-        }
-
-        var sessionCard = sessionGrid.Children
-            .OfType<Border>()
-            .FirstOrDefault(card => Grid.GetColumn(card) == 0);
-        var localCard = sessionGrid.Children
-            .OfType<Border>()
-            .FirstOrDefault(card => Grid.GetColumn(card) == 1);
-
-        if (sessionCard?.Child is not StackPanel sessionStack ||
-            localCard?.Child is not StackPanel localStack)
-        {
-            return;
-        }
-
-        localCard.Child = null;
-        sessionCard.Child = null;
-        sessionGrid.Children.Remove(localCard);
-
-        sessionStack.Children.Add(new Border
-        {
-            Height = 1,
-            Background = Brush("#334155"),
-            Margin = new Thickness(0, 8, 0, 6)
-        });
-
-        foreach (var child in localStack.Children.ToArray())
-        {
-            localStack.Children.Remove(child);
-            sessionStack.Children.Add(child);
-        }
-
-        sessionCard.Child = sessionStack;
-        sessionGrid.ColumnDefinitions = new ColumnDefinitions("1.15*,1.85*");
-        Grid.SetColumn(sessionCard, 0);
-        Grid.SetColumn(partnerCard, 1);
     }
 
     private static void ArrangePartnerNetworkArea(
@@ -201,14 +146,7 @@ internal static class InternetConnectionUi
         controlsPanel.Children.Add(addressBox);
         controlsPanel.Children.Add(buttonGrid);
 
-        var separator = new Border
-        {
-            Width = 1,
-            Background = Brush("#334155"),
-            Margin = new Thickness(4, 0),
-            VerticalAlignment = VerticalAlignment.Stretch
-        };
-
+        var separator = VerticalSeparator();
         var layout = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("1*,Auto,1.35*"),
@@ -224,7 +162,7 @@ internal static class InternetConnectionUi
         partnerStack.Children.Add(layout);
     }
 
-    private static void MoveNetworkCardIntoHeader(
+    private static void MoveAllStatusCardsIntoHeader(
         Window window,
         StackPanel partnerStack)
     {
@@ -235,7 +173,27 @@ internal static class InternetConnectionUi
         var sessionGrid = partnerCard?
             .GetVisualAncestors()
             .OfType<Grid>()
-            .FirstOrDefault(grid => grid.Children.Contains(partnerCard));
+            .FirstOrDefault(grid =>
+                grid.ColumnDefinitions.Count == 3 &&
+                grid.Children.Contains(partnerCard));
+
+        if (partnerCard is null || sessionGrid is null)
+        {
+            return;
+        }
+
+        var sessionCard = sessionGrid.Children
+            .OfType<Border>()
+            .FirstOrDefault(card => Grid.GetColumn(card) == 0);
+        var localCard = sessionGrid.Children
+            .OfType<Border>()
+            .FirstOrDefault(card => Grid.GetColumn(card) == 1);
+
+        if (sessionCard?.Child is not StackPanel sessionStack ||
+            localCard?.Child is not StackPanel localStack)
+        {
+            return;
+        }
 
         var phaseText = window
             .GetVisualDescendants()
@@ -251,31 +209,61 @@ internal static class InternetConnectionUi
             .OfType<Grid>()
             .FirstOrDefault(grid => grid.Children.Contains(phaseBadge));
 
-        if (partnerCard is null || sessionGrid is null ||
-            phaseBadge is null || headerGrid is null)
+        if (phaseBadge is null || headerGrid is null)
         {
             return;
         }
 
-        var sessionCard = sessionGrid.Children
-            .OfType<Border>()
-            .FirstOrDefault(card => !ReferenceEquals(card, partnerCard));
+        sessionCard.Child = null;
+        localCard.Child = null;
+        partnerCard.Child = null;
 
-        sessionGrid.Children.Remove(partnerCard);
-        sessionGrid.ColumnDefinitions = new ColumnDefinitions("*");
-        if (sessionCard is not null)
+        var sessionSeparator = VerticalSeparator();
+        var playerSeparator = VerticalSeparator();
+        var statusLayout = new Grid
         {
-            Grid.SetColumn(sessionCard, 0);
-        }
+            ColumnDefinitions = new ColumnDefinitions("0.7*,Auto,0.95*,Auto,2.15*"),
+            ColumnSpacing = 12,
+            MinWidth = 0
+        };
+
+        sessionStack.VerticalAlignment = VerticalAlignment.Top;
+        statusLayout.Children.Add(sessionStack);
+
+        Grid.SetColumn(sessionSeparator, 1);
+        statusLayout.Children.Add(sessionSeparator);
+
+        localStack.VerticalAlignment = VerticalAlignment.Top;
+        Grid.SetColumn(localStack, 2);
+        statusLayout.Children.Add(localStack);
+
+        Grid.SetColumn(playerSeparator, 3);
+        statusLayout.Children.Add(playerSeparator);
+
+        partnerStack.VerticalAlignment = VerticalAlignment.Top;
+        Grid.SetColumn(partnerStack, 4);
+        statusLayout.Children.Add(partnerStack);
+
+        sessionCard.Child = statusLayout;
+        sessionCard.Margin = new Thickness(16, 0, 0, 0);
+        sessionCard.VerticalAlignment = VerticalAlignment.Center;
 
         headerGrid.Children.Remove(phaseBadge);
-        headerGrid.ColumnDefinitions = new ColumnDefinitions("0.55*,1.45*");
+        headerGrid.ColumnDefinitions = new ColumnDefinitions("0.42*,1.58*");
+        Grid.SetColumn(sessionCard, 1);
+        headerGrid.Children.Add(sessionCard);
 
-        partnerCard.Margin = new Thickness(16, 0, 0, 0);
-        partnerCard.VerticalAlignment = VerticalAlignment.Center;
-        Grid.SetColumn(partnerCard, 1);
-        headerGrid.Children.Add(partnerCard);
+        sessionGrid.IsVisible = false;
+        sessionGrid.Margin = new Thickness(0);
     }
+
+    private static Border VerticalSeparator() => new()
+    {
+        Width = 1,
+        Background = Brush("#334155"),
+        Margin = new Thickness(2, 0),
+        VerticalAlignment = VerticalAlignment.Stretch
+    };
 
     private static SolidColorBrush Brush(string color) =>
         new(Color.Parse(color));
