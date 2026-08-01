@@ -26,7 +26,7 @@ public enum SoulBuddyNetworkState
 
 public sealed class SoulBuddyNetworkService : IAsyncDisposable
 {
-    private const int TcpPort = 45831;
+    public const int DefaultTcpPort = 45831;
     private const int DiscoveryPort = 45832;
     private const int ProtocolVersion = 1;
 
@@ -34,6 +34,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly SynchronizationContext? _synchronizationContext =
         SynchronizationContext.Current;
+    private readonly UpnpPortMapper _portMapper = new();
 
     private CancellationTokenSource? _cancellationSource;
     private TcpListener? _listener;
@@ -42,6 +43,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     private StreamReader? _reader;
     private StreamWriter? _writer;
     private Task? _networkTask;
+    private bool _portMappingCreated;
 
     public SoulBuddyNetworkService()
     {
@@ -59,6 +61,8 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     public string SessionId { get; private set; } = string.Empty;
     public string PlayerName { get; private set; } = string.Empty;
     public string RemotePlayerName { get; private set; } = string.Empty;
+    public string JoinAddress { get; set; } = string.Empty;
+    public string InternetAddress { get; private set; } = string.Empty;
     public NetworkPlayerSnapshot? LatestRemoteSnapshot { get; private set; }
 
     public string StatusText { get; private set; } =
@@ -75,6 +79,15 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
 
     public void PrepareJoin(string sessionId, string playerName)
     {
+        PrepareJoin(sessionId, playerName, JoinAddress);
+    }
+
+    public void PrepareJoin(
+        string sessionId,
+        string playerName,
+        string? internetAddress)
+    {
+        JoinAddress = internetAddress?.Trim() ?? string.Empty;
         Prepare(SoulBuddyNetworkMode.Join, sessionId, playerName);
         StartBackground(DiscoverAndJoinAsync);
     }
@@ -122,6 +135,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         SessionId = string.Empty;
         PlayerName = string.Empty;
         RemotePlayerName = string.Empty;
+        InternetAddress = string.Empty;
         LatestRemoteSnapshot = null;
         SetStatus(
             "Netzwerk noch nicht gestartet.",
@@ -180,16 +194,35 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
 
     private async Task HostAsync(CancellationToken cancellationToken)
     {
-        _listener = new TcpListener(IPAddress.Any, TcpPort);
+        _listener = new TcpListener(IPAddress.Any, DefaultTcpPort);
         _listener.Start();
 
         var addresses = GetLocalIpv4Addresses();
-        var addressText = addresses.Count == 0
+        var localAddressText = addresses.Count == 0
             ? "lokale IP unbekannt"
-            : string.Join(", ", addresses);
+            : string.Join(", ", addresses.Select(address =>
+                $"{address}:{DefaultTcpPort}"));
+
+        string internetText;
+        try
+        {
+            var mapping = await _portMapper.TryCreateMappingAsync(
+                DefaultTcpPort,
+                cancellationToken);
+            _portMappingCreated = mapping.Success;
+            InternetAddress = mapping.ExternalAddress ?? string.Empty;
+            internetText = mapping.Success && !string.IsNullOrWhiteSpace(InternetAddress)
+                ? $"Internet: {InternetAddress}"
+                : "Internet: automatische Portfreigabe nicht verfügbar";
+        }
+        catch
+        {
+            InternetAddress = string.Empty;
+            internetText = "Internet: automatische Portfreigabe nicht verfügbar";
+        }
 
         SetStatus(
-            $"Host aktiv · Warte auf Mitspieler · {addressText}",
+            $"Host aktiv · Warte auf Mitspieler · Lokal: {localAddressText} · {internetText}",
             SoulBuddyNetworkState.Waiting);
 
         var discoveryTask = RunDiscoveryResponderAsync(cancellationToken);
@@ -269,7 +302,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
                 ProtocolVersion = ProtocolVersion,
                 SessionId = SessionId,
                 PlayerName = PlayerName,
-                TcpPort = TcpPort
+                TcpPort = DefaultTcpPort
             };
 
             await _discoveryClient.SendAsync(
@@ -282,18 +315,114 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     private async Task DiscoverAndJoinAsync(CancellationToken cancellationToken)
     {
         SetStatus(
-            "Suche Host für diese Session im lokalen Netzwerk …",
+            string.IsNullOrWhiteSpace(JoinAddress)
+                ? "Suche Host für diese Session automatisch im lokalen Netzwerk …"
+                : "Suche lokal und versuche gleichzeitig die angegebene Internet-Adresse …",
             SoulBuddyNetworkState.Connecting);
 
-        var host = await DiscoverHostAsync(cancellationToken);
-        SetStatus(
-            $"Host gefunden: {host.Address} · Verbinde …",
-            SoulBuddyNetworkState.Connecting);
+        using var raceSource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var candidates = new List<Task<TcpClient?>>
+        {
+            ConnectDiscoveredHostAsync(raceSource.Token)
+        };
 
-        _client = new TcpClient();
-        await _client.ConnectAsync(host.Address, host.Port, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(JoinAddress))
+        {
+            candidates.Add(ConnectDirectAsync(JoinAddress, raceSource.Token));
+        }
+
+        TcpClient? winner = null;
+        var failures = new List<Exception>();
+
+        while (candidates.Count > 0 && winner is null)
+        {
+            var completed = await Task.WhenAny(candidates);
+            candidates.Remove(completed);
+            try
+            {
+                winner = await completed;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                failures.Add(ex);
+            }
+        }
+
+        if (winner is null)
+        {
+            var detail = failures.LastOrDefault()?.Message;
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(detail)
+                    ? "Kein Host gefunden. Prüfe die Session-ID und optional die Internet-Adresse."
+                    : $"Kein Host gefunden: {detail}");
+        }
+
+        raceSource.Cancel();
+        _client = winner;
         await CompleteHandshakeAsync(_client, isHost: false, cancellationToken);
         await ReceiveMessagesAsync(cancellationToken);
+    }
+
+    private async Task<TcpClient?> ConnectDiscoveredHostAsync(
+        CancellationToken cancellationToken)
+    {
+        var host = await DiscoverHostAsync(cancellationToken);
+        var client = new TcpClient();
+        try
+        {
+            await client.ConnectAsync(host.Address, host.Port, cancellationToken);
+            return client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task<TcpClient?> ConnectDirectAsync(
+        string address,
+        CancellationToken cancellationToken)
+    {
+        var endpoint = ParseInternetAddress(address);
+        var client = new TcpClient();
+        try
+        {
+            using var timeoutSource =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutSource.CancelAfter(TimeSpan.FromSeconds(8));
+            await client.ConnectAsync(
+                endpoint.Host,
+                endpoint.Port,
+                timeoutSource.Token);
+            return client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
+
+    private static InternetEndpoint ParseInternetAddress(string value)
+    {
+        var trimmed = value.Trim();
+        if (Uri.TryCreate(
+                trimmed.Contains("://", StringComparison.Ordinal)
+                    ? trimmed
+                    : $"tcp://{trimmed}",
+                UriKind.Absolute,
+                out var uri) &&
+            !string.IsNullOrWhiteSpace(uri.Host))
+        {
+            return new InternetEndpoint(
+                uri.Host,
+                uri.IsDefaultPort ? DefaultTcpPort : uri.Port);
+        }
+
+        throw new InvalidOperationException(
+            "Die Internet-Adresse ist ungültig. Beispiel: 84.123.45.67:45831");
     }
 
     private async Task<DiscoveredHost> DiscoverHostAsync(
@@ -333,7 +462,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
                 when (!cancellationToken.IsCancellationRequested)
             {
                 throw new InvalidOperationException(
-                    "Kein Host für diese Session gefunden. Beide PCs müssen im selben Netzwerk sein.");
+                    "Im lokalen Netzwerk wurde kein passender Host gefunden.");
             }
 
             DiscoveryMessage? response;
@@ -582,6 +711,18 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         var task = _networkTask;
         StopCurrentConnection();
 
+        if (_portMappingCreated)
+        {
+            try
+            {
+                await _portMapper.TryDeleteMappingAsync(DefaultTcpPort);
+            }
+            catch
+            {
+            }
+            _portMappingCreated = false;
+        }
+
         if (task is not null)
         {
             try
@@ -598,6 +739,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             Current = null;
         }
         _sendLock.Dispose();
+        _portMapper.Dispose();
     }
 
     private sealed class NetworkHello
@@ -623,4 +765,5 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     }
 
     private sealed record DiscoveredHost(IPAddress Address, int Port);
+    private sealed record InternetEndpoint(string Host, int Port);
 }
