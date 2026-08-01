@@ -271,8 +271,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             $"🟢 {snapshot.PlayerName} online\n" +
             $"Spiel: {snapshot.Game}\n" +
             $"{activeText}\n" +
-            $"Team: {snapshot.Party.Count}/6 · Gespeichert: {snapshot.StoredPokemonCount}\n" +
-            $"Aktualisiert: {ageText}";
+            $"Team: {snapshot.Party.Count}/6 · Gespeichert: {snapshot.StoredPokemonCount}\n";
     }
 
     private static NetworkPokemonSnapshot ToNetworkPokemon(PokemonCardViewModel pokemon) => new()
