@@ -2,7 +2,6 @@ using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -116,34 +115,16 @@ internal static class InternetConnectionUi
         }
 
         localCard.Child = null;
-        sessionCard.Child = null;
         sessionGrid.Children.Remove(localCard);
 
-        var combined = new Grid
+        sessionStack.Children.Add(new Border
         {
-            ColumnDefinitions = new ColumnDefinitions("0.85*,Auto,1.15*"),
-            ColumnSpacing = 12,
-            MinWidth = 0
-        };
-
-        sessionStack.VerticalAlignment = VerticalAlignment.Top;
-        combined.Children.Add(sessionStack);
-
-        var separator = new Border
-        {
-            Width = 1,
+            Height = 1,
             Background = Brush("#334155"),
-            Margin = new Thickness(2, 0),
-            VerticalAlignment = VerticalAlignment.Stretch
-        };
-        Grid.SetColumn(separator, 1);
-        combined.Children.Add(separator);
+            Margin = new Thickness(0, 7, 0, 5)
+        });
+        sessionStack.Children.Add(localStack);
 
-        localStack.VerticalAlignment = VerticalAlignment.Top;
-        Grid.SetColumn(localStack, 2);
-        combined.Children.Add(localStack);
-
-        sessionCard.Child = combined;
         sessionGrid.ColumnDefinitions = new ColumnDefinitions("1.15*,1.85*");
         Grid.SetColumn(sessionCard, 0);
         Grid.SetColumn(partnerCard, 1);
