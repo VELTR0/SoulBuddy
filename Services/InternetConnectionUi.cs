@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -78,6 +79,80 @@ internal static class InternetConnectionUi
             return false;
         }
 
+        MergeSessionAndLocalPlayerCards(partnerStack);
+        AddInternetAddressField(partnerStack, buttonGrid);
+        return true;
+    }
+
+    private static void MergeSessionAndLocalPlayerCards(StackPanel partnerStack)
+    {
+        var partnerCard = partnerStack
+            .GetVisualAncestors()
+            .OfType<Border>()
+            .FirstOrDefault(border => ReferenceEquals(border.Child, partnerStack));
+        var sessionGrid = partnerCard?
+            .GetVisualAncestors()
+            .OfType<Grid>()
+            .FirstOrDefault(grid =>
+                grid.ColumnDefinitions.Count == 3 &&
+                grid.Children.Contains(partnerCard));
+
+        if (partnerCard is null || sessionGrid is null)
+        {
+            return;
+        }
+
+        var sessionCard = sessionGrid.Children
+            .OfType<Border>()
+            .FirstOrDefault(card => Grid.GetColumn(card) == 0);
+        var localCard = sessionGrid.Children
+            .OfType<Border>()
+            .FirstOrDefault(card => Grid.GetColumn(card) == 1);
+
+        if (sessionCard?.Child is not StackPanel sessionStack ||
+            localCard?.Child is not StackPanel localStack)
+        {
+            return;
+        }
+
+        localCard.Child = null;
+        sessionCard.Child = null;
+        sessionGrid.Children.Remove(localCard);
+
+        var combined = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("0.85*,Auto,1.15*"),
+            ColumnSpacing = 12,
+            MinWidth = 0
+        };
+
+        sessionStack.VerticalAlignment = VerticalAlignment.Top;
+        combined.Children.Add(sessionStack);
+
+        var separator = new Border
+        {
+            Width = 1,
+            Background = Brush("#334155"),
+            Margin = new Thickness(2, 0),
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+        Grid.SetColumn(separator, 1);
+        combined.Children.Add(separator);
+
+        localStack.VerticalAlignment = VerticalAlignment.Top;
+        Grid.SetColumn(localStack, 2);
+        combined.Children.Add(localStack);
+
+        sessionCard.Child = combined;
+        sessionGrid.ColumnDefinitions = new ColumnDefinitions("1.15*,1.85*");
+        Grid.SetColumn(sessionCard, 0);
+        Grid.SetColumn(partnerCard, 1);
+    }
+
+    private static void AddInternetAddressField(
+        StackPanel partnerStack,
+        Grid buttonGrid)
+    {
         var label = new TextBlock
         {
             Text = "INTERNET-ADRESSE DES HOSTS (OPTIONAL)",
@@ -107,7 +182,6 @@ internal static class InternetConnectionUi
         var buttonIndex = partnerStack.Children.IndexOf(buttonGrid);
         partnerStack.Children.Insert(buttonIndex, label);
         partnerStack.Children.Insert(buttonIndex + 1, addressBox);
-        return true;
     }
 
     private static SolidColorBrush Brush(string color) =>
