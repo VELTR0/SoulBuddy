@@ -17,6 +17,11 @@ namespace SoulBuddy.Services;
 /// </summary>
 internal static class ResizableMainColumns
 {
+    private const double TeamMinimumWidth = 300;
+    private const double StoredMinimumWidth = 180;
+    private const double DetailsMinimumWidth = 260;
+    private const double SplitterWidth = 8;
+
     private static readonly HashSet<Window> AttachedWindows = [];
     private static DispatcherTimer? _discoveryTimer;
 
@@ -93,12 +98,34 @@ internal static class ResizableMainColumns
             return false;
         }
 
-        cards[0].MinWidth = 300;
-        cards[1].MinWidth = 180;
-        cards[2].MinWidth = 260;
-
-        contentGrid.ColumnDefinitions = new ColumnDefinitions(
-            "2.15*,8,0.62*,8,1.1*");
+        contentGrid.ColumnDefinitions.Clear();
+        contentGrid.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(2.15, GridUnitType.Star),
+            MinWidth = TeamMinimumWidth
+        });
+        contentGrid.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(SplitterWidth),
+            MinWidth = SplitterWidth,
+            MaxWidth = SplitterWidth
+        });
+        contentGrid.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(0.62, GridUnitType.Star),
+            MinWidth = StoredMinimumWidth
+        });
+        contentGrid.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(SplitterWidth),
+            MinWidth = SplitterWidth,
+            MaxWidth = SplitterWidth
+        });
+        contentGrid.ColumnDefinitions.Add(new ColumnDefinition
+        {
+            Width = new GridLength(1.1, GridUnitType.Star),
+            MinWidth = DetailsMinimumWidth
+        });
         contentGrid.ColumnSpacing = 0;
 
         Grid.SetColumn(cards[0], 0);
@@ -118,7 +145,7 @@ internal static class ResizableMainColumns
 
     private static GridSplitter CreateSplitter() => new()
     {
-        Width = 8,
+        Width = SplitterWidth,
         HorizontalAlignment = HorizontalAlignment.Stretch,
         VerticalAlignment = VerticalAlignment.Stretch,
         ResizeDirection = GridResizeDirection.Columns,
