@@ -10,7 +10,8 @@ namespace SoulBuddy.Services;
 
 /// <summary>
 /// Keeps the six party slots arranged like the in-game party screen:
-/// two columns with three Pokémon each.
+/// two columns with three Pokémon each. It also keeps the party card
+/// level and HP information in a stable vertical layout.
 /// </summary>
 internal static class MainWindowLayoutUpdater
 {
@@ -92,7 +93,59 @@ internal static class MainWindowLayoutUpdater
         {
             Grid.SetRow(cards[slot], slot / 2);
             Grid.SetColumn(cards[slot], slot % 2);
+            ArrangePartyCardHp(cards[slot]);
         }
+    }
+
+    private static void ArrangePartyCardHp(Control card)
+    {
+        if (card is not Button { Content: Grid cardLayout })
+        {
+            return;
+        }
+
+        var textPanel = cardLayout.Children
+            .OfType<StackPanel>()
+            .FirstOrDefault();
+        var hpGrid = textPanel?.Children
+            .OfType<Grid>()
+            .FirstOrDefault(candidate =>
+                candidate.Children.OfType<ProgressBar>().Any());
+
+        if (hpGrid is null || hpGrid.Children.Count < 3)
+        {
+            return;
+        }
+
+        var level = hpGrid.Children[0];
+        var hpBar = hpGrid.Children
+            .OfType<ProgressBar>()
+            .First();
+        var hpText = hpGrid.Children
+            .OfType<TextBlock>()
+            .FirstOrDefault(text => !ReferenceEquals(text, level));
+
+        if (hpText is null)
+        {
+            return;
+        }
+
+        hpGrid.RowDefinitions = new RowDefinitions("Auto,Auto");
+        hpGrid.ColumnDefinitions = new ColumnDefinitions("*,Auto");
+        hpGrid.RowSpacing = 2;
+        hpGrid.ColumnSpacing = 5;
+
+        Grid.SetRow(level, 0);
+        Grid.SetColumn(level, 0);
+        Grid.SetColumnSpan(level, 2);
+
+        Grid.SetRow(hpBar, 1);
+        Grid.SetColumn(hpBar, 0);
+        Grid.SetColumnSpan(hpBar, 1);
+
+        Grid.SetRow(hpText, 1);
+        Grid.SetColumn(hpText, 1);
+        Grid.SetColumnSpan(hpText, 1);
     }
 
     private static Panel? FindPartyPanel(Window window)
