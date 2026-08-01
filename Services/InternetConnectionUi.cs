@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -79,7 +80,7 @@ internal static class InternetConnectionUi
         }
 
         MergeSessionAndLocalPlayerCards(partnerStack);
-        AddInternetAddressField(partnerStack, buttonGrid);
+        ArrangePartnerNetworkArea(partnerStack, buttonGrid);
         return true;
     }
 
@@ -115,25 +116,53 @@ internal static class InternetConnectionUi
         }
 
         localCard.Child = null;
+        sessionCard.Child = null;
         sessionGrid.Children.Remove(localCard);
 
         sessionStack.Children.Add(new Border
         {
             Height = 1,
             Background = Brush("#334155"),
-            Margin = new Thickness(0, 7, 0, 5)
+            Margin = new Thickness(0, 8, 0, 6)
         });
-        sessionStack.Children.Add(localStack);
 
+        foreach (var child in localStack.Children.ToArray())
+        {
+            localStack.Children.Remove(child);
+            sessionStack.Children.Add(child);
+        }
+
+        sessionCard.Child = sessionStack;
         sessionGrid.ColumnDefinitions = new ColumnDefinitions("1.15*,1.85*");
         Grid.SetColumn(sessionCard, 0);
         Grid.SetColumn(partnerCard, 1);
     }
 
-    private static void AddInternetAddressField(
+    private static void ArrangePartnerNetworkArea(
         StackPanel partnerStack,
         Grid buttonGrid)
     {
+        var statusControls = partnerStack.Children
+            .Where(child => !ReferenceEquals(child, buttonGrid))
+            .ToArray();
+
+        foreach (var child in statusControls)
+        {
+            partnerStack.Children.Remove(child);
+        }
+        partnerStack.Children.Remove(buttonGrid);
+
+        var statusPanel = new StackPanel
+        {
+            Spacing = 5,
+            VerticalAlignment = VerticalAlignment.Top,
+            MinWidth = 0
+        };
+        foreach (var child in statusControls)
+        {
+            statusPanel.Children.Add(child);
+        }
+
         var label = new TextBlock
         {
             Text = "INTERNET-ADRESSE DES HOSTS (OPTIONAL)",
@@ -150,7 +179,8 @@ internal static class InternetConnectionUi
             Background = Brush("#0F1829"),
             Foreground = Brush("#F8FAFC"),
             BorderBrush = Brush("#334E8A"),
-            BorderThickness = new Thickness(1)
+            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Stretch
         };
         addressBox.TextChanged += (_, _) =>
         {
@@ -160,9 +190,37 @@ internal static class InternetConnectionUi
             }
         };
 
-        var buttonIndex = partnerStack.Children.IndexOf(buttonGrid);
-        partnerStack.Children.Insert(buttonIndex, label);
-        partnerStack.Children.Insert(buttonIndex + 1, addressBox);
+        var controlsPanel = new StackPanel
+        {
+            Spacing = 6,
+            VerticalAlignment = VerticalAlignment.Top,
+            MinWidth = 0
+        };
+        controlsPanel.Children.Add(label);
+        controlsPanel.Children.Add(addressBox);
+        controlsPanel.Children.Add(buttonGrid);
+
+        var separator = new Border
+        {
+            Width = 1,
+            Background = Brush("#334155"),
+            Margin = new Thickness(4, 0),
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+
+        var layout = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("1*,Auto,1.35*"),
+            ColumnSpacing = 12,
+            MinWidth = 0
+        };
+        layout.Children.Add(statusPanel);
+        Grid.SetColumn(separator, 1);
+        layout.Children.Add(separator);
+        Grid.SetColumn(controlsPanel, 2);
+        layout.Children.Add(controlsPanel);
+
+        partnerStack.Children.Add(layout);
     }
 
     private static SolidColorBrush Brush(string color) =>
