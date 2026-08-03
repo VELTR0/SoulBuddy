@@ -67,7 +67,8 @@ public sealed class SessionStore
         return new SessionContext
         {
             Session = session,
-            LocalPlayer = localPlayer
+            LocalPlayer = localPlayer,
+            LaunchMode = SessionLaunchMode.Host
         };
     }
 
@@ -112,7 +113,8 @@ public sealed class SessionStore
         return new SessionContext
         {
             Session = session,
-            LocalPlayer = localPlayer
+            LocalPlayer = localPlayer,
+            LaunchMode = SessionLaunchMode.Join
         };
     }
 
@@ -146,7 +148,8 @@ public sealed class SessionStore
         return new SessionContext
         {
             Session = session,
-            LocalPlayer = player
+            LocalPlayer = player,
+            LaunchMode = SessionLaunchMode.Continue
         };
     }
 
