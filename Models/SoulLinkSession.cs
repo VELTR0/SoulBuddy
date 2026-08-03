@@ -1,5 +1,12 @@
 namespace SoulBuddy.Models;
 
+public enum SessionLaunchMode
+{
+    Host,
+    Join,
+    Continue
+}
+
 public sealed class SoulLinkSession
 {
     public required string Id { get; init; }
@@ -36,4 +43,6 @@ public sealed class SessionContext
     public required SoulLinkSession Session { get; init; }
 
     public required SessionPlayer LocalPlayer { get; init; }
+
+    public SessionLaunchMode LaunchMode { get; init; } = SessionLaunchMode.Continue;
 }
