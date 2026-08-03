@@ -44,15 +44,15 @@ internal static class SoulLinkCardUpdater
 
         var network = SoulBuddyNetworkService.Current;
         var snapshot = network?.LatestRemoteSnapshot;
-        var remoteParty = snapshot?.Party ?? [];
         var connected = network?.State == SoulBuddyNetworkState.Connected;
+        var remoteParty = connected ? snapshot?.Party ?? [] : [];
         var allPairs = new List<SoulLinkPair>();
 
         foreach (var window in desktop.Windows)
         {
             var pairs = UpdateWindow(
                 window,
-                connected ? remoteParty : [],
+                remoteParty,
                 snapshot?.PlayerName ?? string.Empty);
             allPairs.AddRange(pairs);
             UpdateOverview(window, pairs, connected);
@@ -73,7 +73,7 @@ internal static class SoulLinkCardUpdater
         }
         catch
         {
-            // Die UI soll bei einem vorübergehenden Dateifehler weiterlaufen.
+            // Ein vorübergehender Dateifehler darf die Oberfläche nicht stoppen.
         }
         finally
         {
@@ -86,118 +86,210 @@ internal static class SoulLinkCardUpdater
         IReadOnlyList<NetworkPokemonSnapshot> remoteParty,
         string partnerPlayerName)
     {
-        var availablePartners = remoteParty
-            .Select(pokemon => new PartnerCandidate(pokemon))
+        var cards = FindPartyCards(window);
+        if (cards.Count == 0)
+        {
+            return [];
+        }
+
+        var localEntries = cards
+            .Select((card, index) => ReadLocalCard(card, index))
+            .Where(entry => entry is not null)
+            .Cast<LocalCard>()
+            .ToArray();
+
+        var localLocationKeys = localEntries
+            .Select(entry => NormalizeLocation(entry.Location))
+            .Where(key => key.Length > 0)
+            .ToHashSet(StringComparer.Ordinal);
+        var hasAnyLocationOverlap = remoteParty.Any(remote =>
+            localLocationKeys.Contains(NormalizeLocation(remote.Location)));
+
+        var available = remoteParty
+            .Select((pokemon, index) => new PartnerCandidate(pokemon, index))
             .ToList();
         var pairs = new List<SoulLinkPair>();
 
-        var linkTexts = window
-            .GetVisualDescendants()
-            .OfType<TextBlock>()
-            .Where(text => text.Text is not null &&
-                           text.Text.StartsWith("🔗", StringComparison.Ordinal))
-            .ToArray();
-
-        foreach (var linkText in linkTexts)
+        foreach (var local in localEntries)
         {
-            var card = linkText
-                .GetVisualAncestors()
-                .OfType<Button>()
-                .FirstOrDefault();
-
-            if (card is null)
+            var panel = GetOrCreatePanel(local.Card, local.LinkText);
+            if (panel is null)
             {
                 continue;
             }
 
-            var texts = card
-                .GetVisualDescendants()
-                .OfType<TextBlock>()
-                .ToArray();
-            var locationText = texts
-                .Select(text => text.Text)
-                .FirstOrDefault(text =>
-                    !string.IsNullOrWhiteSpace(text) &&
-                    text.StartsWith("📍", StringComparison.Ordinal));
-
-            if (string.IsNullOrWhiteSpace(locationText))
-            {
-                continue;
-            }
-
-            var localLocation = locationText[2..].Trim();
-            var localKey = NormalizeLocation(localLocation);
-            var localName = texts
-                .Select(text => text.Text)
-                .FirstOrDefault(text =>
-                    !string.IsNullOrWhiteSpace(text) &&
-                    !text.StartsWith("📍", StringComparison.Ordinal) &&
-                    !text.StartsWith("🔗", StringComparison.Ordinal) &&
-                    !text.StartsWith("Level ", StringComparison.Ordinal) &&
-                    !text.EndsWith(" KP", StringComparison.Ordinal))
-                ?? "Unbekannt";
-            var (localCurrentHp, localMaxHp) = ParseHp(texts);
-
-            var match = availablePartners.FirstOrDefault(candidate =>
+            var localKey = NormalizeLocation(local.Location);
+            var match = available.FirstOrDefault(candidate =>
                 NormalizeLocation(candidate.Pokemon.Location) == localKey);
-            var panel = GetOrCreatePanel(card, linkText);
+
+            // Beim gleichen Savegame sind Name, Spezies und Level identisch.
+            // Diese Identitätsprüfung fängt auch abweichende Ortsbezeichnungen ab.
+            match ??= available.FirstOrDefault(candidate =>
+                IsSamePokemon(local, candidate.Pokemon));
+
+            // Nur wenn überhaupt kein Fangort zwischen den Teams übereinstimmt,
+            // verwenden wir die Teamposition als letzte Kompatibilitätslösung.
+            if (match is null &&
+                !hasAnyLocationOverlap &&
+                local.Index < remoteParty.Count)
+            {
+                match = available.FirstOrDefault(candidate =>
+                    candidate.Index == local.Index);
+            }
 
             if (match is null)
             {
                 ShowUnlinked(panel);
-                pairs.Add(new SoulLinkPair
-                {
-                    LocationKey = localKey,
-                    LocationName = localLocation,
-                    LocalPokemonName = localName,
-                    LocalCurrentHp = localCurrentHp,
-                    LocalMaxHp = localMaxHp,
-                    PartnerPlayerName = partnerPlayerName,
-                    Status = SoulLinkPairStatus.MissingPartner
-                });
+                pairs.Add(CreatePair(local, null, partnerPlayerName));
                 continue;
             }
 
-            availablePartners.Remove(match);
-            var fainted = localCurrentHp == 0 || match.Pokemon.CurrentHp == 0;
+            available.Remove(match);
+            var fainted = local.CurrentHp == 0 || match.Pokemon.CurrentHp == 0;
             ShowLinked(panel, match.Pokemon, fainted);
-            pairs.Add(new SoulLinkPair
-            {
-                LocationKey = localKey,
-                LocationName = localLocation,
-                LocalPokemonName = localName,
-                LocalCurrentHp = localCurrentHp,
-                LocalMaxHp = localMaxHp,
-                PartnerSpeciesId = match.Pokemon.SpeciesId,
-                PartnerPokemonName = match.Pokemon.DisplayName,
-                PartnerCurrentHp = match.Pokemon.CurrentHp,
-                PartnerMaxHp = match.Pokemon.MaxHp,
-                PartnerPlayerName = partnerPlayerName,
-                Status = fainted
-                    ? SoulLinkPairStatus.Fainted
-                    : SoulLinkPairStatus.Active
-            });
+            pairs.Add(CreatePair(local, match.Pokemon, partnerPlayerName));
         }
 
         return pairs;
     }
 
-    private static PartnerPanel GetOrCreatePanel(
+    private static IReadOnlyList<Button> FindPartyCards(Window window)
+    {
+        var header = window
+            .GetVisualDescendants()
+            .OfType<TextBlock>()
+            .FirstOrDefault(text => string.Equals(
+                text.Text,
+                "Aktuelles Team",
+                StringComparison.Ordinal));
+
+        var section = header?
+            .GetVisualAncestors()
+            .OfType<Grid>()
+            .FirstOrDefault(grid =>
+                grid.RowDefinitions.Count == 2 &&
+                grid.Children.OfType<Grid>().Any(child => Grid.GetRow(child) == 1));
+        var partyGrid = section?.Children
+            .OfType<Grid>()
+            .FirstOrDefault(child => Grid.GetRow(child) == 1);
+
+        return partyGrid?.Children
+            .OfType<Button>()
+            .OrderBy(card => Grid.GetRow(card) * 2 + Grid.GetColumn(card))
+            .ToArray() ?? [];
+    }
+
+    private static LocalCard? ReadLocalCard(Button card, int index)
+    {
+        var texts = card
+            .GetVisualDescendants()
+            .OfType<TextBlock>()
+            .ToArray();
+        var locationText = texts.FirstOrDefault(text =>
+            text.Text?.StartsWith("📍", StringComparison.Ordinal) == true);
+        if (locationText?.Text is not { } rawLocation)
+        {
+            return null;
+        }
+
+        var linkText = texts.FirstOrDefault(text =>
+            text.Text?.StartsWith("🔗", StringComparison.Ordinal) == true);
+        var name = texts
+            .Select(text => text.Text)
+            .FirstOrDefault(value => IsPokemonNameText(value))
+            ?? "Unbekannt";
+        var level = ParseLevel(texts);
+        var (currentHp, maxHp) = ParseHp(texts);
+
+        return new LocalCard(
+            card,
+            linkText,
+            index,
+            rawLocation[2..].Trim(),
+            name,
+            level,
+            currentHp,
+            maxHp);
+    }
+
+    private static bool IsPokemonNameText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        return !value.StartsWith("📍", StringComparison.Ordinal) &&
+               !value.StartsWith("🔗", StringComparison.Ordinal) &&
+               !value.StartsWith("Level ", StringComparison.Ordinal) &&
+               !value.EndsWith(" KP", StringComparison.Ordinal) &&
+               value is not "SOULLINK" and
+               not "VERKNÜPFT MIT" and
+               not "KAMPFUNFÄHIG" and
+               not "Noch nicht\nverknüpft";
+    }
+
+    private static bool IsSamePokemon(
+        LocalCard local,
+        NetworkPokemonSnapshot remote)
+    {
+        if (local.Level > 0 && remote.Level != local.Level)
+        {
+            return false;
+        }
+
+        var localName = NormalizeName(local.Name);
+        var displayName = NormalizeName(remote.DisplayName);
+        var speciesName = NormalizeName(remote.SpeciesName);
+
+        return localName == displayName ||
+               localName == speciesName ||
+               localName.StartsWith(displayName, StringComparison.Ordinal) ||
+               localName.EndsWith(speciesName, StringComparison.Ordinal);
+    }
+
+    private static SoulLinkPair CreatePair(
+        LocalCard local,
+        NetworkPokemonSnapshot? partner,
+        string partnerPlayerName)
+    {
+        var fainted = partner is not null &&
+                      (local.CurrentHp == 0 || partner.CurrentHp == 0);
+        return new SoulLinkPair
+        {
+            LocationKey = NormalizeLocation(local.Location),
+            LocationName = local.Location,
+            LocalPokemonName = local.Name,
+            LocalCurrentHp = local.CurrentHp,
+            LocalMaxHp = local.MaxHp,
+            PartnerSpeciesId = partner?.SpeciesId,
+            PartnerPokemonName = partner?.DisplayName ?? string.Empty,
+            PartnerCurrentHp = partner?.CurrentHp,
+            PartnerMaxHp = partner?.MaxHp,
+            PartnerPlayerName = partnerPlayerName,
+            Status = partner is null
+                ? SoulLinkPairStatus.MissingPartner
+                : fainted
+                    ? SoulLinkPairStatus.Fainted
+                    : SoulLinkPairStatus.Active
+        };
+    }
+
+    private static PartnerPanel? GetOrCreatePanel(
         Button card,
-        TextBlock oldLinkText)
+        TextBlock? oldLinkText)
     {
         if (Panels.TryGetValue(card, out var existing))
         {
             return existing;
         }
 
-        oldLinkText.IsVisible = false;
-
-        if (card.Content is not Control originalContent)
+        if (oldLinkText is null || card.Content is not Control originalContent)
         {
-            throw new InvalidOperationException(
-                "Die Pokémon-Karte besitzt keinen darstellbaren Inhalt.");
+            return null;
         }
+
+        oldLinkText.IsVisible = false;
 
         var partnerImage = new Image
         {
@@ -218,10 +310,10 @@ internal static class SoulLinkCardUpdater
         };
         var partnerLabel = new TextBlock
         {
-            Text = "VERKNÜPFT MIT",
+            Text = "SOULLINK",
             FontSize = 7,
             FontWeight = FontWeight.Bold,
-            Foreground = Color("#86EFAC"),
+            Foreground = Color("#FBBF24"),
             TextAlignment = TextAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
@@ -234,8 +326,8 @@ internal static class SoulLinkCardUpdater
         };
         var partnerBorder = new Border
         {
-            Background = Color("#10251F"),
-            BorderBrush = Color("#22C55E"),
+            Background = Color("#2A2111"),
+            BorderBrush = Color("#D97706"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(7),
             Padding = new Thickness(3, 2),
@@ -248,7 +340,6 @@ internal static class SoulLinkCardUpdater
             ColumnSpacing = 5,
             MinWidth = 0
         };
-
         Grid.SetColumn(originalContent, 0);
         outer.Children.Add(originalContent);
         Grid.SetColumn(partnerBorder, 1);
@@ -261,18 +352,18 @@ internal static class SoulLinkCardUpdater
             partnerImage,
             partnerName);
         Panels[card] = panel;
+        ShowUnlinked(panel);
         return panel;
     }
 
     private static void ShowUnlinked(PartnerPanel panel)
     {
-        const string signature = "unlinked";
-        if (panel.Signature == signature)
+        if (panel.Signature == "unlinked")
         {
             return;
         }
 
-        panel.Signature = signature;
+        panel.Signature = "unlinked";
         panel.SpeciesId = 0;
         panel.Image.Source = null;
         panel.Label.Text = "SOULLINK";
@@ -342,34 +433,36 @@ internal static class SoulLinkCardUpdater
             return;
         }
 
-        if (pairs.Count == 0)
-        {
-            overview.Panel.Children.Add(OverviewText(
-                "Noch keine Team-Pokémon erkannt.",
-                "#94A3B8",
-                11));
-            return;
-        }
-
         foreach (var pair in pairs)
         {
             var status = pair.Status switch
             {
-                SoulLinkPairStatus.Active => ("● AKTIV", "#86EFAC", "#10251F", "#22C55E"),
-                SoulLinkPairStatus.Fainted => ("● KAMPFUNFÄHIG", "#FCA5A5", "#301717", "#EF4444"),
-                _ => ("● PARTNER FEHLT", "#FDE68A", "#2A2111", "#D97706")
+                SoulLinkPairStatus.Active =>
+                    ("● AKTIV", "#86EFAC", "#10251F", "#22C55E"),
+                SoulLinkPairStatus.Fainted =>
+                    ("● KAMPFUNFÄHIG", "#FCA5A5", "#301717", "#EF4444"),
+                _ =>
+                    ("● PARTNER FEHLT", "#FDE68A", "#2A2111", "#D97706")
             };
             var partner = string.IsNullOrWhiteSpace(pair.PartnerPokemonName)
                 ? "Noch kein Partner"
                 : pair.PartnerPokemonName;
             var stack = new StackPanel { Spacing = 3 };
-            stack.Children.Add(OverviewText(pair.LocationName, "#93C5FD", 10, FontWeight.Bold));
+            stack.Children.Add(OverviewText(
+                pair.LocationName,
+                "#93C5FD",
+                10,
+                FontWeight.Bold));
             stack.Children.Add(OverviewText(
                 $"{pair.LocalPokemonName}  ↔  {partner}",
                 "#F8FAFC",
                 12,
                 FontWeight.SemiBold));
-            stack.Children.Add(OverviewText(status.Item1, status.Item2, 9, FontWeight.Bold));
+            stack.Children.Add(OverviewText(
+                status.Item1,
+                status.Item2,
+                9,
+                FontWeight.Bold));
             overview.Panel.Children.Add(new Border
             {
                 Background = Color(status.Item3),
@@ -389,20 +482,13 @@ internal static class SoulLinkCardUpdater
             return existing;
         }
 
-        var tabs = window
-            .GetVisualDescendants()
-            .OfType<TabControl>()
-            .FirstOrDefault();
+        var tabs = window.GetVisualDescendants().OfType<TabControl>().FirstOrDefault();
         if (tabs is null)
         {
             return null;
         }
 
-        var panel = new StackPanel
-        {
-            Spacing = 7,
-            Margin = new Thickness(2)
-        };
+        var panel = new StackPanel { Spacing = 7, Margin = new Thickness(2) };
         tabs.Items.Add(new TabItem
         {
             Header = "SoulLinks",
@@ -412,7 +498,6 @@ internal static class SoulLinkCardUpdater
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto
             }
         });
-
         var overview = new SoulLinkOverview(panel);
         Overviews[window] = overview;
         window.Closed += (_, _) => Overviews.Remove(window);
@@ -432,21 +517,28 @@ internal static class SoulLinkCardUpdater
         TextWrapping = TextWrapping.Wrap
     };
 
+    private static int ParseLevel(IEnumerable<TextBlock> texts)
+    {
+        var value = texts.Select(text => text.Text).FirstOrDefault(text =>
+            text?.StartsWith("Level ", StringComparison.Ordinal) == true);
+        return value is not null && int.TryParse(value[6..], out var level)
+            ? level
+            : 0;
+    }
+
     private static (int Current, int Max) ParseHp(IEnumerable<TextBlock> texts)
     {
-        var hpText = texts
-            .Select(text => text.Text)
-            .FirstOrDefault(value =>
-                !string.IsNullOrWhiteSpace(value) &&
-                value.EndsWith(" KP", StringComparison.Ordinal) &&
-                value.Contains('/'));
+        var hpText = texts.Select(text => text.Text).FirstOrDefault(value =>
+            !string.IsNullOrWhiteSpace(value) &&
+            value.EndsWith(" KP", StringComparison.Ordinal) &&
+            value.Contains('/'));
         if (string.IsNullOrWhiteSpace(hpText))
         {
             return (-1, -1);
         }
 
-        var value = hpText.Replace(" KP", string.Empty);
-        var parts = value.Split('/', StringSplitOptions.TrimEntries);
+        var parts = hpText.Replace(" KP", string.Empty)
+            .Split('/', StringSplitOptions.TrimEntries);
         return parts.Length == 2 &&
                int.TryParse(parts[0], out var current) &&
                int.TryParse(parts[1], out var max)
@@ -467,27 +559,40 @@ internal static class SoulLinkCardUpdater
 
     private static string NormalizeLocation(string value)
     {
-        var normalized = value
+        var normalized = new string(value
             .Trim()
             .ToLowerInvariant()
-            .Replace("📍", string.Empty)
-            .Replace(" ", string.Empty)
-            .Replace("-", string.Empty)
-            .Replace("_", string.Empty);
-
+            .Where(char.IsLetterOrDigit)
+            .ToArray());
         return normalized switch
         {
-            "starter" => "starter",
-            "newborkia" => "starter",
-            "newbarktown" => "starter",
+            "starter" or "newborkia" or "newbarktown" => "starter",
             _ => normalized
         };
     }
 
+    private static string NormalizeName(string value) => new(value
+        .Trim()
+        .ToLowerInvariant()
+        .Where(char.IsLetterOrDigit)
+        .ToArray());
+
     private static SolidColorBrush Color(string value) =>
         new(Avalonia.Media.Color.Parse(value));
 
-    private sealed record PartnerCandidate(NetworkPokemonSnapshot Pokemon);
+    private sealed record PartnerCandidate(
+        NetworkPokemonSnapshot Pokemon,
+        int Index);
+
+    private sealed record LocalCard(
+        Button Card,
+        TextBlock? LinkText,
+        int Index,
+        string Location,
+        string Name,
+        int Level,
+        int CurrentHp,
+        int MaxHp);
 
     private sealed class PartnerPanel(
         Border border,
