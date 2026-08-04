@@ -17,7 +17,6 @@ public sealed class MainWindow : Window
     private readonly PokemonVisualService _visualService = new();
     private readonly SoulBuddyNetworkService _networkService = new();
     private readonly SessionContext? _sessionContext;
-    private readonly DispatcherTimer _partnerSearchAnimationTimer;
     private readonly Grid _partyPanel = new()
     {
         RowDefinitions = new RowDefinitions("*,*,*,*,*,*"),
@@ -31,18 +30,12 @@ public sealed class MainWindow : Window
     private TextBlock? _networkStatusText;
     private TextBlock? _partnerSummaryText;
     private bool _compact;
-    private int _partnerSearchDotCount;
     private SoulBuddyNetworkState _lastRenderedNetworkState = SoulBuddyNetworkState.Idle;
     private string _lastPartnerPartySignature = string.Empty;
 
     public MainWindow(SessionContext? sessionContext = null)
     {
         _sessionContext = sessionContext;
-        _partnerSearchAnimationTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(1)
-        };
-        _partnerSearchAnimationTimer.Tick += OnPartnerSearchAnimationTick;
 
         Title = sessionContext is null
             ? "SoulBuddy"
@@ -224,17 +217,6 @@ public sealed class MainWindow : Window
             or SoulBuddyNetworkState.Connecting
             or SoulBuddyNetworkState.Error;
 
-    private void OnPartnerSearchAnimationTick(object? sender, EventArgs eventArgs)
-    {
-        if (!IsSearchingForPartner || _networkService.LatestRemoteSnapshot is not null)
-        {
-            return;
-        }
-
-        _partnerSearchDotCount = (_partnerSearchDotCount + 1) % 4;
-        ShowPartnerSearchText();
-    }
-
     private void ShowPartnerSearchText()
     {
         if (_partnerSummaryText is null)
@@ -242,7 +224,7 @@ public sealed class MainWindow : Window
             return;
         }
 
-        _partnerSummaryText.Text = "Suche Mitspieler" + new string('.', _partnerSearchDotCount);
+        _partnerSummaryText.Text = "Suche Mitspieler...";
         _partnerSummaryText.Foreground = Brush("#CBD5E1");
     }
 
@@ -250,11 +232,6 @@ public sealed class MainWindow : Window
     {
         Dispatcher.UIThread.Post(() =>
         {
-            if (IsSearchingForPartner)
-            {
-                _partnerSearchDotCount = 0;
-            }
-
             UpdatePartnerSummary(_networkService.LatestRemoteSnapshot);
 
             if (_lastRenderedNetworkState != _networkService.State)
@@ -647,7 +624,6 @@ public sealed class MainWindow : Window
 
     private async void OnOpened(object? sender, EventArgs eventArgs)
     {
-        _partnerSearchAnimationTimer.Start();
         ApplyResponsiveLayout();
         RenderParty();
         RenderStoredPokemon();
@@ -659,8 +635,6 @@ public sealed class MainWindow : Window
 
     private async void OnClosing(object? sender, WindowClosingEventArgs eventArgs)
     {
-        _partnerSearchAnimationTimer.Stop();
-        _partnerSearchAnimationTimer.Tick -= OnPartnerSearchAnimationTick;
         _networkService.StatusChanged -= OnNetworkStatusChanged;
         _networkService.PlayerSnapshotReceived -= OnPlayerSnapshotReceived;
         await _networkService.DisposeAsync();
