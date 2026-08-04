@@ -35,10 +35,7 @@ internal static class AutomaticSessionNetworking
     {
         Dispatcher.UIThread.Post(() =>
         {
-            _timer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(250)
-            };
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
             _timer.Tick += (_, _) => DiscoverMainWindows();
             _timer.Start();
             DiscoverMainWindows();
@@ -47,44 +44,35 @@ internal static class AutomaticSessionNetworking
 
     private static void DiscoverMainWindows()
     {
-        if (Application.Current?.ApplicationLifetime is not
-            IClassicDesktopStyleApplicationLifetime desktop)
-        {
+        if (Application.Current?.ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
             return;
-        }
 
         foreach (var window in desktop.Windows.OfType<MainWindow>())
         {
             RemoveLegacySessionUi(window);
+            RenameEncounterSection(window);
 
-            if (!StartedWindows.Add(window))
-            {
-                continue;
-            }
-
+            if (!StartedWindows.Add(window)) continue;
             window.Closed += (_, _) => StartedWindows.Remove(window);
-
-            if (!SoullockeLaunchSettings.Enabled)
-            {
-                _ = StartForWindowAsync(window);
-            }
+            if (!SoullockeLaunchSettings.Enabled) _ = StartForWindowAsync(window);
         }
+    }
+
+    private static void RenameEncounterSection(MainWindow window)
+    {
+        var heading = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(text =>
+            string.Equals(text.Text, "Gefangene Pokémon", StringComparison.Ordinal) ||
+            string.Equals(text.Text, "Gespeicherte Pokémon", StringComparison.Ordinal));
+        if (heading is not null) heading.Text = "Begegnungen";
     }
 
     private static void RemoveLegacySessionUi(MainWindow window)
     {
         if (ContextField?.GetValue(window) is SessionContext context)
-        {
             window.Title = $"SoulBuddy · {context.LocalPlayer.DisplayName}";
-        }
 
-        var sessionHeading = window
-            .GetVisualDescendants()
-            .OfType<TextBlock>()
-            .FirstOrDefault(text => string.Equals(
-                text.Text,
-                "AKTIVE SESSION",
-                StringComparison.Ordinal));
+        var sessionHeading = window.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault(text =>
+            string.Equals(text.Text, "AKTIVE SESSION", StringComparison.Ordinal));
 
         if (sessionHeading?.Parent is StackPanel sessionSection)
         {
@@ -93,11 +81,7 @@ internal static class AutomaticSessionNetworking
             sessionSection.Margin = new Thickness(0);
         }
 
-        var sessionGrid = sessionHeading?
-            .GetVisualAncestors()
-            .OfType<Grid>()
-            .FirstOrDefault();
-
+        var sessionGrid = sessionHeading?.GetVisualAncestors().OfType<Grid>().FirstOrDefault();
         if (sessionGrid is not null && sessionGrid.ColumnDefinitions.Count >= 5)
         {
             sessionGrid.ColumnDefinitions[0].Width = new GridLength(0);
@@ -111,45 +95,29 @@ internal static class AutomaticSessionNetworking
     private static async Task StartForWindowAsync(MainWindow window)
     {
         await Task.Delay(350);
-
         if (SoullockeLaunchSettings.Enabled ||
             ContextField?.GetValue(window) is not SessionContext context ||
             NetworkField?.GetValue(window) is not SoulBuddyNetworkService network)
-        {
             return;
-        }
 
         var playerName = context.LocalPlayer.DisplayName;
-
         try
         {
             network.PrepareJoin(LanDiscoveryChannel, playerName, network.JoinAddress);
-
-            var searchDuration = TimeSpan.FromMilliseconds(
-                1800 + Random.Shared.Next(0, 2200));
-            var searchUntil = DateTimeOffset.UtcNow + searchDuration;
-
+            var searchUntil = DateTimeOffset.UtcNow + TimeSpan.FromMilliseconds(1800 + Random.Shared.Next(0, 2200));
             while (DateTimeOffset.UtcNow < searchUntil)
             {
                 await Task.Delay(200);
-                if (network.State == SoulBuddyNetworkState.Connected)
-                {
-                    return;
-                }
+                if (network.State == SoulBuddyNetworkState.Connected) return;
             }
-
             if (network.State != SoulBuddyNetworkState.Connected)
-            {
                 network.PrepareHost(LanDiscoveryChannel, playerName);
-            }
         }
         catch
         {
             await Task.Delay(Random.Shared.Next(350, 900));
             if (network.State != SoulBuddyNetworkState.Connected)
-            {
                 network.PrepareJoin(LanDiscoveryChannel, playerName, network.JoinAddress);
-            }
         }
     }
 }
