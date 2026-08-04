@@ -40,7 +40,6 @@ public sealed class SessionStore
 
     public async Task<SessionContext> CreateAsync(
         string sessionId,
-        string sessionName,
         string playerName,
         CancellationToken cancellationToken = default)
     {
@@ -57,7 +56,6 @@ public sealed class SessionStore
         var session = new SoulLinkSession
         {
             Id = normalizedId,
-            Name = string.IsNullOrWhiteSpace(sessionName) ? normalizedId : sessionName.Trim(),
             Players = [localPlayer]
         };
 
@@ -87,8 +85,7 @@ public sealed class SessionStore
         var session = await LoadSessionAsync(normalizedId, cancellationToken)
             ?? new SoulLinkSession
             {
-                Id = normalizedId,
-                Name = normalizedId
+                Id = normalizedId
             };
 
         var existingPlayer = session.Players.FirstOrDefault(player =>
