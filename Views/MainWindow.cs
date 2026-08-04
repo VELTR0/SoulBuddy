@@ -111,13 +111,18 @@ public sealed class MainWindow : Window
         title.Children.Add(Text("SoulBuddy", 23, FontWeight.Bold, "#F8FAFC"));
         title.Children.Add(Text("Eigenständiger SoulLink- und Nuzlocke-Begleiter", 11, FontWeight.Normal, "#94A3B8"));
         grid.Children.Add(title);
+
+        var gameStatus = BoundText("LocalPlayerStatus", 10, FontWeight.Bold, "#A7F3D0");
+        gameStatus.VerticalAlignment = VerticalAlignment.Center;
         var badge = new Border
         {
-            Background = Brush("#172554"),
+            Background = Brush("#123128"),
+            BorderBrush = Brush("#2F765E"),
+            BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(14),
             Padding = new Thickness(10, 5),
             VerticalAlignment = VerticalAlignment.Center,
-            Child = Text("PHASE 3C", 10, FontWeight.Bold, "#93C5FD")
+            Child = gameStatus
         };
         Grid.SetColumn(badge, 1);
         grid.Children.Add(badge);
@@ -156,8 +161,6 @@ public sealed class MainWindow : Window
             Margin = new Thickness(16, 2)
         };
         localStack.Children.Add(Text(local is null ? "LOKALER SPIELER" : local.DisplayName.ToUpperInvariant(), 9, FontWeight.Bold, "#93C5FD"));
-        localStack.Children.Add(BoundText("LocalPlayerStatus", 11, FontWeight.SemiBold, "#A7F3D0"));
-        localStack.Children.Add(BoundText("LocalGameText", 10, FontWeight.Normal, "#CBD5E1"));
         localStack.Children.Add(BoundText("LocalActivePokemonText", 10, FontWeight.Normal, "#CBD5E1"));
         Grid.SetColumn(localStack, 2);
         grid.Children.Add(localStack);
@@ -200,7 +203,6 @@ public sealed class MainWindow : Window
     {
         Width = 1,
         Background = Brush("#334155"),
-        Margin = new Thickness(0, 0, 0, 0),
         VerticalAlignment = VerticalAlignment.Stretch
     };
 
