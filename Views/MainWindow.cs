@@ -24,6 +24,7 @@ public sealed class MainWindow : Window
     };
     private readonly StackPanel _storedPanel = new() { Spacing = 7 };
     private TextBlock? _networkStatusText;
+    private TextBlock? _partnerSummaryText;
     private bool _compact;
     private SoulBuddyNetworkState _lastRenderedNetworkState = SoulBuddyNetworkState.Idle;
     private string _lastPartnerPartySignature = string.Empty;
@@ -129,51 +130,85 @@ public sealed class MainWindow : Window
         var session = _sessionContext?.Session;
         var local = _sessionContext?.LocalPlayer;
         var partner = session?.Players.FirstOrDefault(player => player.Id != local?.Id);
+
         var grid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("0.9*,1.25*,1.25*"),
-            ColumnSpacing = 9,
-            Margin = new Thickness(16, 9, 16, 0)
+            ColumnDefinitions = new ColumnDefinitions("0.9*,Auto,1.25*,Auto,1.25*")
         };
-        var sessionStack = new StackPanel { Spacing = 3 };
+
+        var sessionStack = new StackPanel
+        {
+            Spacing = 3,
+            Margin = new Thickness(4, 2, 14, 2)
+        };
         sessionStack.Children.Add(Text("AKTIVE SESSION", 9, FontWeight.Bold, "#93C5FD"));
         sessionStack.Children.Add(Text(session?.Name ?? "Keine Session", 13, FontWeight.Bold, "#F8FAFC"));
         sessionStack.Children.Add(Text(session is null ? "Keine ID" : $"ID: {session.Id}", 10, FontWeight.Normal, "#CBD5E1"));
-        grid.Children.Add(CompactCard(sessionStack));
+        grid.Children.Add(sessionStack);
 
-        var localStack = new StackPanel { Spacing = 3 };
+        var firstDivider = SectionDivider();
+        Grid.SetColumn(firstDivider, 1);
+        grid.Children.Add(firstDivider);
+
+        var localStack = new StackPanel
+        {
+            Spacing = 3,
+            Margin = new Thickness(16, 2)
+        };
         localStack.Children.Add(Text(local is null ? "LOKALER SPIELER" : local.DisplayName.ToUpperInvariant(), 9, FontWeight.Bold, "#93C5FD"));
         localStack.Children.Add(BoundText("LocalPlayerStatus", 11, FontWeight.SemiBold, "#A7F3D0"));
         localStack.Children.Add(BoundText("LocalGameText", 10, FontWeight.Normal, "#CBD5E1"));
         localStack.Children.Add(BoundText("LocalActivePokemonText", 10, FontWeight.Normal, "#CBD5E1"));
-        var localCard = CompactCard(localStack);
-        Grid.SetColumn(localCard, 1);
-        grid.Children.Add(localCard);
+        Grid.SetColumn(localStack, 2);
+        grid.Children.Add(localStack);
 
-        var partnerStack = new StackPanel { Spacing = 5 };
+        var secondDivider = SectionDivider();
+        Grid.SetColumn(secondDivider, 3);
+        grid.Children.Add(secondDivider);
+
+        var partnerStack = new StackPanel
+        {
+            Spacing = 4,
+            Margin = new Thickness(16, 2, 4, 2)
+        };
         partnerStack.Children.Add(Text(partner is null ? "MITTSPIELER" : partner.DisplayName.ToUpperInvariant(), 9, FontWeight.Bold, "#93C5FD"));
-        partnerStack.Children.Add(Text(partner is null ? "🟡 Nicht verbunden" : "🟡 Lokal eingetragen", 11, FontWeight.SemiBold, "#FBBF24"));
-        var partnerStatus = BoundText("PartnerStatus", 10, FontWeight.Normal, "#CBD5E1");
-        partnerStatus.TextWrapping = TextWrapping.Wrap;
-        partnerStack.Children.Add(partnerStatus);
+
+        _partnerSummaryText = Text("Nicht verbunden", 10, FontWeight.Normal, "#CBD5E1");
+        _partnerSummaryText.TextWrapping = TextWrapping.Wrap;
+        partnerStack.Children.Add(_partnerSummaryText);
+
         _networkStatusText = Text(_networkService.StatusText, 9, FontWeight.Normal, "#94A3B8");
         _networkStatusText.TextWrapping = TextWrapping.Wrap;
         partnerStack.Children.Add(_networkStatusText);
-        var partnerCard = CompactCard(partnerStack);
-        Grid.SetColumn(partnerCard, 2);
-        grid.Children.Add(partnerCard);
-        return grid;
+
+        Grid.SetColumn(partnerStack, 4);
+        grid.Children.Add(partnerStack);
+
+        return new Border
+        {
+            Background = Brush("#151F33"),
+            BorderBrush = Brush("#2B3C58"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(9),
+            Padding = new Thickness(12, 10),
+            Margin = new Thickness(16, 9, 16, 0),
+            Child = grid
+        };
     }
+
+    private static Border SectionDivider() => new()
+    {
+        Width = 1,
+        Background = Brush("#334155"),
+        Margin = new Thickness(0, 0, 0, 0),
+        VerticalAlignment = VerticalAlignment.Stretch
+    };
 
     private void OnNetworkStatusChanged(object? sender, EventArgs eventArgs)
     {
         Dispatcher.UIThread.Post(() =>
         {
-            if (_networkStatusText is not null)
-            {
-                _networkStatusText.Text = _networkService.StatusText;
-                _networkStatusText.Foreground = Brush(_networkService.State == SoulBuddyNetworkState.Connected ? "#A7F3D0" : "#94A3B8");
-            }
+            UpdatePartnerSummary(_networkService.LatestRemoteSnapshot);
 
             if (_lastRenderedNetworkState != _networkService.State)
             {
@@ -187,13 +222,61 @@ public sealed class MainWindow : Window
     private void OnPlayerSnapshotReceived(object? sender, NetworkPlayerSnapshot snapshot)
     {
         var signature = BuildPartnerPartySignature(snapshot);
-        if (signature == _lastPartnerPartySignature)
+        Dispatcher.UIThread.Post(() =>
         {
-            return;
+            UpdatePartnerSummary(snapshot);
+            if (signature == _lastPartnerPartySignature)
+            {
+                return;
+            }
+
+            _lastPartnerPartySignature = signature;
+            RenderParty();
+        });
+    }
+
+    private void UpdatePartnerSummary(NetworkPlayerSnapshot? snapshot)
+    {
+        if (_partnerSummaryText is not null)
+        {
+            if (snapshot is not null)
+            {
+                var activeText = snapshot.ActivePokemon is null
+                    ? "Aktiv: unbekannt"
+                    : $"Aktiv: {snapshot.ActivePokemon.DisplayName} · Lv. {snapshot.ActivePokemon.Level} · " +
+                      $"{snapshot.ActivePokemon.CurrentHp}/{snapshot.ActivePokemon.MaxHp} KP";
+                _partnerSummaryText.Text =
+                    $"🟢 {snapshot.PlayerName} online\n" +
+                    $"{activeText}\n" +
+                    $"Team: {snapshot.Party.Count}/6 · Gespeichert: {snapshot.StoredPokemonCount}";
+                _partnerSummaryText.Foreground = Brush("#CBD5E1");
+            }
+            else
+            {
+                _partnerSummaryText.Text = _networkService.State switch
+                {
+                    SoulBuddyNetworkState.Connected => "Warte auf Partnerdaten …",
+                    SoulBuddyNetworkState.Waiting => "Warte auf Mitspieler …",
+                    SoulBuddyNetworkState.Connecting => "Suche nach Mitspieler …",
+                    SoulBuddyNetworkState.Error => "Netzwerkfehler",
+                    _ => "Nicht verbunden"
+                };
+                _partnerSummaryText.Foreground = Brush(
+                    _networkService.State == SoulBuddyNetworkState.Error
+                        ? "#FCA5A5"
+                        : "#CBD5E1");
+            }
         }
 
-        _lastPartnerPartySignature = signature;
-        Dispatcher.UIThread.Post(RenderParty);
+        if (_networkStatusText is not null)
+        {
+            var hideTechnicalStatus = _networkService.State == SoulBuddyNetworkState.Connected;
+            _networkStatusText.Text = hideTechnicalStatus
+                ? string.Empty
+                : _networkService.StatusText;
+            _networkStatusText.IsVisible = !hideTechnicalStatus;
+            _networkStatusText.Foreground = Brush("#94A3B8");
+        }
     }
 
     private static string BuildPartnerPartySignature(NetworkPlayerSnapshot? snapshot)
@@ -234,7 +317,11 @@ public sealed class MainWindow : Window
 
     private Control BuildRightColumn()
     {
-        var tabs = new TabControl();
+        var tabs = new TabControl
+        {
+            SelectedIndex = 1
+        };
+
         var livePanel = new StackPanel { Spacing = 8, Margin = new Thickness(2) };
         var liveTitle = BoundText("LiveEncounterTitle", 12, FontWeight.Bold, "#93C5FD");
         livePanel.Children.Add(liveTitle);
@@ -244,7 +331,7 @@ public sealed class MainWindow : Window
         livePanel.Children.Add(liveText);
         livePanel.Children.Add(new Border { Height = 1, Background = Brush("#334155"), Margin = new Thickness(0, 4) });
         livePanel.Children.Add(Text("Die Gegner- und Ortsdaten können je nach ROM noch unvollständig sein.", 10, FontWeight.Normal, "#94A3B8"));
-        var activity = new ListBox { ItemsSource = _viewModel.ActivityFeed, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
+
         var detailsPanel = new StackPanel { Spacing = 8, Margin = new Thickness(2) };
         var detailsTitle = BoundText("DetailsTitle", 17, FontWeight.Bold, "#F8FAFC");
         detailsTitle.TextWrapping = TextWrapping.Wrap;
@@ -253,9 +340,25 @@ public sealed class MainWindow : Window
         details.TextWrapping = TextWrapping.Wrap;
         details.LineHeight = 17;
         detailsPanel.Children.Add(details);
-        tabs.Items.Add(new TabItem { Header = "Live", Content = new ScrollViewer { Content = livePanel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto } });
-        tabs.Items.Add(new TabItem { Header = "Aktivität", Content = activity });
-        tabs.Items.Add(new TabItem { Header = "Details", Content = new ScrollViewer { Content = detailsPanel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto } });
+
+        tabs.Items.Add(new TabItem
+        {
+            Header = "Live",
+            Content = new ScrollViewer
+            {
+                Content = livePanel,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            }
+        });
+        tabs.Items.Add(new TabItem
+        {
+            Header = "Details",
+            Content = new ScrollViewer
+            {
+                Content = detailsPanel,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            }
+        });
         return tabs;
     }
 
@@ -509,6 +612,7 @@ public sealed class MainWindow : Window
         RenderStoredPokemon();
         _lastRenderedNetworkState = _networkService.State;
         _lastPartnerPartySignature = BuildPartnerPartySignature(_networkService.LatestRemoteSnapshot);
+        UpdatePartnerSummary(_networkService.LatestRemoteSnapshot);
         await _viewModel.InitializeAsync();
     }
 
