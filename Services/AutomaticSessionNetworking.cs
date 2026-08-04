@@ -1,8 +1,10 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using SoulBuddy.Models;
 using SoulBuddy.Views;
 
@@ -53,6 +55,8 @@ internal static class AutomaticSessionNetworking
 
         foreach (var window in desktop.Windows.OfType<MainWindow>())
         {
+            RemoveLegacySessionUi(window);
+
             if (!StartedWindows.Add(window))
             {
                 continue;
@@ -60,6 +64,43 @@ internal static class AutomaticSessionNetworking
 
             window.Closed += (_, _) => StartedWindows.Remove(window);
             _ = StartForWindowAsync(window);
+        }
+    }
+
+    private static void RemoveLegacySessionUi(MainWindow window)
+    {
+        if (ContextField?.GetValue(window) is SessionContext context)
+        {
+            window.Title = $"SoulBuddy · {context.LocalPlayer.DisplayName}";
+        }
+
+        var sessionHeading = window
+            .GetVisualDescendants()
+            .OfType<TextBlock>()
+            .FirstOrDefault(text => string.Equals(
+                text.Text,
+                "AKTIVE SESSION",
+                StringComparison.Ordinal));
+
+        if (sessionHeading?.Parent is StackPanel sessionSection)
+        {
+            sessionSection.IsVisible = false;
+            sessionSection.Width = 0;
+            sessionSection.Margin = new Thickness(0);
+        }
+
+        var sessionGrid = sessionHeading?
+            .GetVisualAncestors()
+            .OfType<Grid>()
+            .FirstOrDefault();
+
+        if (sessionGrid is not null && sessionGrid.ColumnDefinitions.Count >= 5)
+        {
+            sessionGrid.ColumnDefinitions[0].Width = new GridLength(0);
+            sessionGrid.ColumnDefinitions[1].Width = new GridLength(0);
+            sessionGrid.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
+            sessionGrid.ColumnDefinitions[3].Width = new GridLength(1);
+            sessionGrid.ColumnDefinitions[4].Width = new GridLength(1, GridUnitType.Star);
         }
     }
 
