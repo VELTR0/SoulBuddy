@@ -106,7 +106,14 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         var databasePath = Path.Combine(configDirectory, "soulbuddy.db");
         var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         var snapshotPartySource = new JsonPartySource(partyJsonPath);
-        var livePartySource = new LivePartySource(snapshotPartySource);
+
+        // In Soullocke mode an old party.json must never win during startup.
+        // The live party therefore starts empty and accepts local data only
+        // after a new collector event arrives during this application run.
+        var livePartySource = new LivePartySource(
+            snapshotPartySource,
+            initializeFromSnapshot: !config.SoullockeEnabled);
+
         var playerLiveStateSource = new PlayerLiveStateSource();
         var knownPokemonStore = new KnownPokemonStore(databasePath);
         var locationMapper = new LocationMapper();
