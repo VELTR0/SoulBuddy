@@ -10,27 +10,66 @@ public sealed record PokemonVisualData(
 
 public sealed class PokemonVisualService : IDisposable
 {
+    private const int MaximumAttempts = 3;
+
     private readonly HttpClient _httpClient = new()
     {
-        Timeout = TimeSpan.FromSeconds(8)
+        Timeout = TimeSpan.FromSeconds(12)
     };
 
+    // Successful visuals remain cached. Failed tasks are removed so a later
+    // card update can retry instead of keeping an empty sprite forever.
     private readonly ConcurrentDictionary<int, Task<PokemonVisualData>> _cache = new();
+    private readonly SemaphoreSlim _downloadGate = new(3, 3);
 
-    public Task<PokemonVisualData> GetAsync(
+    public async Task<PokemonVisualData> GetAsync(
         int speciesId,
         bool isShiny,
         CancellationToken cancellationToken = default)
     {
         if (speciesId <= 0)
         {
-            return Task.FromResult(new PokemonVisualData(null, []));
+            return new PokemonVisualData(null, []);
         }
 
         var cacheKey = isShiny ? -speciesId : speciesId;
-        return _cache.GetOrAdd(
-            cacheKey,
-            _ => LoadAsync(speciesId, isShiny, cancellationToken));
+
+        for (var attempt = 1; attempt <= MaximumAttempts; attempt++)
+        {
+            var task = _cache.GetOrAdd(
+                cacheKey,
+                _ => LoadAsync(speciesId, isShiny, cancellationToken));
+
+            PokemonVisualData visual;
+            try
+            {
+                visual = await task;
+            }
+            catch
+            {
+                visual = new PokemonVisualData(null, []);
+            }
+
+            if (visual.Sprite is not null)
+            {
+                return visual;
+            }
+
+            // Never retain a failed/null result. Only remove the exact task we
+            // awaited, so a newer retry from another card is not discarded.
+            _cache.TryRemove(new KeyValuePair<int, Task<PokemonVisualData>>(
+                cacheKey,
+                task));
+
+            if (attempt < MaximumAttempts)
+            {
+                await Task.Delay(
+                    TimeSpan.FromMilliseconds(250 * attempt),
+                    cancellationToken);
+            }
+        }
+
+        return new PokemonVisualData(null, []);
     }
 
     private async Task<PokemonVisualData> LoadAsync(
@@ -38,6 +77,7 @@ public sealed class PokemonVisualService : IDisposable
         bool isShiny,
         CancellationToken cancellationToken)
     {
+        await _downloadGate.WaitAsync(cancellationToken);
         try
         {
             var apiUrl = $"https://pokeapi.co/api/v2/pokemon/{speciesId}";
@@ -74,9 +114,17 @@ public sealed class PokemonVisualService : IDisposable
 
             return new PokemonVisualData(bitmap, typeNames);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch
         {
             return new PokemonVisualData(null, []);
+        }
+        finally
+        {
+            _downloadGate.Release();
         }
     }
 
@@ -116,6 +164,7 @@ public sealed class PokemonVisualService : IDisposable
             }
         }
 
+        _downloadGate.Dispose();
         _httpClient.Dispose();
     }
 }
