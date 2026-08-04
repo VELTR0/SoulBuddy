@@ -12,7 +12,6 @@ public sealed class SessionSetupWindow : Window
 {
     private readonly SessionStore _sessionStore = new();
     private readonly TextBox _sessionIdBox;
-    private readonly TextBox _sessionNameBox;
     private readonly TextBox _playerNameBox;
     private readonly TextBlock _statusText;
     private readonly Border _activeSessionCard;
@@ -24,13 +23,12 @@ public sealed class SessionSetupWindow : Window
     {
         Title = "SoulBuddy · Session";
         Width = 760;
-        Height = 690;
+        Height = 650;
         MinWidth = 640;
-        MinHeight = 600;
+        MinHeight = 560;
         Background = Brush("#0B1220");
 
         _sessionIdBox = CreateTextBox("z. B. meine-soullink-session");
-        _sessionNameBox = CreateTextBox("z. B. Unsere SoulLink-Challenge");
         _playerNameBox = CreateTextBox("Dein Spielername");
         _statusText = Text("", 13, FontWeight.Medium, "#CBD5E1");
         _statusText.TextWrapping = TextWrapping.Wrap;
@@ -80,8 +78,6 @@ public sealed class SessionSetupWindow : Window
             12,
             FontWeight.Normal,
             "#7C8BA1"));
-        form.Children.Add(CreateLabel("Session-Name (nur beim Erstellen)"));
-        form.Children.Add(_sessionNameBox);
         form.Children.Add(CreateLabel("Spielername"));
         form.Children.Add(_playerNameBox);
 
@@ -123,9 +119,8 @@ public sealed class SessionSetupWindow : Window
                 return;
             }
 
-            _activeSessionTitle.Text = _activeContext.Session.Name;
+            _activeSessionTitle.Text = $"Session {_activeContext.Session.Id}";
             _activeSessionDetails.Text =
-                $"ID: {_activeContext.Session.Id}\n" +
                 $"Spieler: {_activeContext.LocalPlayer.DisplayName} · Slot {_activeContext.LocalPlayer.Slot}\n" +
                 $"Teilnehmer: {_activeContext.Session.Players.Count}/2";
             _activeSessionCard.IsVisible = true;
@@ -142,7 +137,6 @@ public sealed class SessionSetupWindow : Window
         {
             var context = await _sessionStore.CreateAsync(
                 _sessionIdBox.Text ?? string.Empty,
-                _sessionNameBox.Text ?? string.Empty,
                 _playerNameBox.Text ?? string.Empty);
             OpenMainWindow(context);
         });
