@@ -20,15 +20,6 @@ public sealed class PokemonCardViewModel
     public string Pokeball { get; init; } = string.Empty;
     public bool IsShiny { get; init; }
 
-    // These optional values allow explicit links later (for example when
-    // Phase 4 introduces manual corrections). Until then the current remote
-    // snapshot is resolved deterministically by location and identity.
-    public bool HasExplicitSoulLink { get; init; }
-    public string ExplicitLinkedDisplayName { get; init; } = string.Empty;
-    public string ExplicitLinkedSpecies { get; init; } = string.Empty;
-    public int ExplicitLinkedSpeciesId { get; init; }
-    public int ExplicitLinkedCurrentHp { get; init; } = -1;
-
     private NetworkPokemonSnapshot? ResolvedSoulLink
     {
         get
@@ -46,42 +37,29 @@ public sealed class PokemonCardViewModel
             }
 
             var location = NormalizeLocation(Subtitle);
-            var byLocation = remoteParty.FirstOrDefault(remote =>
-                location.Length > 0 &&
-                NormalizeLocation(remote.Location) == location);
-            if (byLocation is not null)
+            if (location.Length == 0)
             {
-                return byLocation;
+                return null;
             }
 
-            var display = Normalize(DisplayName);
-            var species = Normalize(Species);
             return remoteParty.FirstOrDefault(remote =>
-                (Level <= 0 || remote.Level == Level) &&
-                (display == Normalize(remote.DisplayName) ||
-                 display == Normalize(remote.SpeciesName) ||
-                 species == Normalize(remote.DisplayName) ||
-                 species == Normalize(remote.SpeciesName)));
+                NormalizeLocation(remote.Location) == location);
         }
     }
 
-    public bool IsSoulLinked => HasExplicitSoulLink || ResolvedSoulLink is not null;
+    public bool IsSoulLinked => ResolvedSoulLink is not null;
 
-    public string LinkedDisplayName => HasExplicitSoulLink
-        ? ExplicitLinkedDisplayName
-        : ResolvedSoulLink?.DisplayName ?? string.Empty;
+    public string LinkedDisplayName =>
+        ResolvedSoulLink?.DisplayName ?? string.Empty;
 
-    public string LinkedSpecies => HasExplicitSoulLink
-        ? ExplicitLinkedSpecies
-        : ResolvedSoulLink?.SpeciesName ?? string.Empty;
+    public string LinkedSpecies =>
+        ResolvedSoulLink?.SpeciesName ?? string.Empty;
 
-    public int LinkedSpeciesId => HasExplicitSoulLink
-        ? ExplicitLinkedSpeciesId
-        : ResolvedSoulLink?.SpeciesId ?? 0;
+    public int LinkedSpeciesId =>
+        ResolvedSoulLink?.SpeciesId ?? 0;
 
-    public int LinkedCurrentHp => HasExplicitSoulLink
-        ? ExplicitLinkedCurrentHp
-        : ResolvedSoulLink?.CurrentHp ?? -1;
+    public int LinkedCurrentHp =>
+        ResolvedSoulLink?.CurrentHp ?? -1;
 
     public bool LinkedIsFainted => IsSoulLinked &&
                                    (CurrentHp == 0 || LinkedCurrentHp == 0);
