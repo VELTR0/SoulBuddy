@@ -25,6 +25,8 @@ public sealed class MainWindow : Window
     private readonly StackPanel _storedPanel = new() { Spacing = 7 };
     private TextBlock? _networkStatusText;
     private bool _compact;
+    private SoulBuddyNetworkState _lastRenderedNetworkState = SoulBuddyNetworkState.Idle;
+    private string _lastPartnerPartySignature = string.Empty;
 
     public MainWindow(SessionContext? sessionContext = null)
     {
@@ -52,12 +54,8 @@ public sealed class MainWindow : Window
 
     private Control BuildLayout()
     {
-        var root = new Grid
-        {
-            RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto")
-        };
+        var root = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto") };
         root.Children.Add(BuildHeader());
-
         var sessionPanel = BuildSessionPanel();
         Grid.SetRow(sessionPanel, 1);
         root.Children.Add(sessionPanel);
@@ -70,14 +68,9 @@ public sealed class MainWindow : Window
         };
         Grid.SetRow(content, 2);
         content.Children.Add(Card(BuildPartySection()));
-
-        var stored = Card(BuildScrollableSection(
-            "Gespeicherte Pokémon",
-            "PokemonCountText",
-            _storedPanel));
+        var stored = Card(BuildScrollableSection("Gespeicherte Pokémon", "PokemonCountText", _storedPanel));
         Grid.SetColumn(stored, 1);
         content.Children.Add(stored);
-
         var right = Card(BuildRightColumn());
         Grid.SetColumn(right, 2);
         content.Children.Add(right);
@@ -90,10 +83,7 @@ public sealed class MainWindow : Window
             BorderThickness = new Thickness(0, 1, 0, 0),
             Padding = new Thickness(14, 7)
         };
-        var footerGrid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto")
-        };
+        var footerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var status = BoundText("StatusText", 11, FontWeight.Medium, "#CBD5E1");
         status.TextTrimming = TextTrimming.CharacterEllipsis;
         footerGrid.Children.Add(status);
@@ -115,17 +105,10 @@ public sealed class MainWindow : Window
             BorderThickness = new Thickness(0, 0, 0, 1),
             Padding = new Thickness(16, 9)
         };
-        var grid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto")
-        };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var title = new StackPanel { Spacing = 1 };
         title.Children.Add(Text("SoulBuddy", 23, FontWeight.Bold, "#F8FAFC"));
-        title.Children.Add(Text(
-            "Eigenständiger SoulLink- und Nuzlocke-Begleiter",
-            11,
-            FontWeight.Normal,
-            "#94A3B8"));
+        title.Children.Add(Text("Eigenständiger SoulLink- und Nuzlocke-Begleiter", 11, FontWeight.Normal, "#94A3B8"));
         grid.Children.Add(title);
         var badge = new Border
         {
@@ -152,7 +135,6 @@ public sealed class MainWindow : Window
             ColumnSpacing = 9,
             Margin = new Thickness(16, 9, 16, 0)
         };
-
         var sessionStack = new StackPanel { Spacing = 3 };
         sessionStack.Children.Add(Text("AKTIVE SESSION", 9, FontWeight.Bold, "#93C5FD"));
         sessionStack.Children.Add(Text(session?.Name ?? "Keine Session", 13, FontWeight.Bold, "#F8FAFC"));
@@ -174,66 +156,13 @@ public sealed class MainWindow : Window
         var partnerStatus = BoundText("PartnerStatus", 10, FontWeight.Normal, "#CBD5E1");
         partnerStatus.TextWrapping = TextWrapping.Wrap;
         partnerStack.Children.Add(partnerStatus);
-
         _networkStatusText = Text(_networkService.StatusText, 9, FontWeight.Normal, "#94A3B8");
         _networkStatusText.TextWrapping = TextWrapping.Wrap;
         partnerStack.Children.Add(_networkStatusText);
-
-        var buttonGrid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,*"),
-            ColumnSpacing = 6
-        };
-        buttonGrid.Children.Add(CreateNetworkButton("Host", PrepareHost, session is not null && local is not null, true));
-        var joinButton = CreateNetworkButton("Beitreten", PrepareJoin, session is not null && local is not null, false);
-        Grid.SetColumn(joinButton, 1);
-        buttonGrid.Children.Add(joinButton);
-        partnerStack.Children.Add(buttonGrid);
-
         var partnerCard = CompactCard(partnerStack);
         Grid.SetColumn(partnerCard, 2);
         grid.Children.Add(partnerCard);
         return grid;
-    }
-
-    private Button CreateNetworkButton(string label, Action action, bool isEnabled, bool primary)
-    {
-        var button = new Button
-        {
-            Content = label,
-            IsEnabled = isEnabled,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            Padding = new Thickness(8, 5),
-            FontSize = 10,
-            FontWeight = FontWeight.SemiBold,
-            Background = Brush(primary ? "#1D4ED8" : "#172554"),
-            Foreground = Brush("#F8FAFC"),
-            BorderBrush = Brush(primary ? "#60A5FA" : "#334E8A"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(7)
-        };
-        button.Click += (_, _) => action();
-        return button;
-    }
-
-    private void PrepareHost() => PrepareNetwork((sessionId, playerName) => _networkService.PrepareHost(sessionId, playerName));
-    private void PrepareJoin() => PrepareNetwork((sessionId, playerName) => _networkService.PrepareJoin(sessionId, playerName));
-
-    private void PrepareNetwork(Action<string, string> prepare)
-    {
-        try
-        {
-            prepare(_sessionContext?.Session.Id ?? string.Empty, _sessionContext?.LocalPlayer.DisplayName ?? string.Empty);
-        }
-        catch (Exception ex)
-        {
-            if (_networkStatusText is not null)
-            {
-                _networkStatusText.Text = ex.Message;
-                _networkStatusText.Foreground = Brush("#FCA5A5");
-            }
-        }
     }
 
     private void OnNetworkStatusChanged(object? sender, EventArgs eventArgs)
@@ -243,18 +172,40 @@ public sealed class MainWindow : Window
             if (_networkStatusText is not null)
             {
                 _networkStatusText.Text = _networkService.StatusText;
-                _networkStatusText.Foreground = Brush(
-                    _networkService.State == SoulBuddyNetworkState.Connected
-                        ? "#A7F3D0"
-                        : "#94A3B8");
+                _networkStatusText.Foreground = Brush(_networkService.State == SoulBuddyNetworkState.Connected ? "#A7F3D0" : "#94A3B8");
             }
-            RenderParty();
+
+            if (_lastRenderedNetworkState != _networkService.State)
+            {
+                _lastRenderedNetworkState = _networkService.State;
+                _lastPartnerPartySignature = BuildPartnerPartySignature(_networkService.LatestRemoteSnapshot);
+                RenderParty();
+            }
         });
     }
 
     private void OnPlayerSnapshotReceived(object? sender, NetworkPlayerSnapshot snapshot)
     {
+        var signature = BuildPartnerPartySignature(snapshot);
+        if (signature == _lastPartnerPartySignature)
+        {
+            return;
+        }
+
+        _lastPartnerPartySignature = signature;
         Dispatcher.UIThread.Post(RenderParty);
+    }
+
+    private static string BuildPartnerPartySignature(NetworkPlayerSnapshot? snapshot)
+    {
+        if (snapshot is null)
+        {
+            return string.Empty;
+        }
+
+        return string.Join("|", snapshot.Party.Select(pokemon =>
+            $"{pokemon.SpeciesId}:{pokemon.DisplayName}:{pokemon.Level}:" +
+            $"{pokemon.CurrentHp}:{pokemon.MaxHp}:{pokemon.Location}"));
     }
 
     private Control BuildPartySection()
@@ -293,13 +244,7 @@ public sealed class MainWindow : Window
         livePanel.Children.Add(liveText);
         livePanel.Children.Add(new Border { Height = 1, Background = Brush("#334155"), Margin = new Thickness(0, 4) });
         livePanel.Children.Add(Text("Die Gegner- und Ortsdaten können je nach ROM noch unvollständig sein.", 10, FontWeight.Normal, "#94A3B8"));
-
-        var activity = new ListBox
-        {
-            ItemsSource = _viewModel.ActivityFeed,
-            Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0)
-        };
+        var activity = new ListBox { ItemsSource = _viewModel.ActivityFeed, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
         var detailsPanel = new StackPanel { Spacing = 8, Margin = new Thickness(2) };
         var detailsTitle = BoundText("DetailsTitle", 17, FontWeight.Bold, "#F8FAFC");
         detailsTitle.TextWrapping = TextWrapping.Wrap;
@@ -308,7 +253,6 @@ public sealed class MainWindow : Window
         details.TextWrapping = TextWrapping.Wrap;
         details.LineHeight = 17;
         detailsPanel.Children.Add(details);
-
         tabs.Items.Add(new TabItem { Header = "Live", Content = new ScrollViewer { Content = livePanel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto } });
         tabs.Items.Add(new TabItem { Header = "Aktivität", Content = activity });
         tabs.Items.Add(new TabItem { Header = "Details", Content = new ScrollViewer { Content = detailsPanel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto } });
@@ -317,11 +261,7 @@ public sealed class MainWindow : Window
 
     private Control SectionHeader(string title, string countBinding)
     {
-        var grid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-            Margin = new Thickness(0, 0, 0, 7)
-        };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 0, 0, 7) };
         grid.Children.Add(Text(title, 15, FontWeight.Bold, "#F8FAFC"));
         var count = BoundText(countBinding, 10, FontWeight.Medium, "#93C5FD");
         Grid.SetColumn(count, 1);
@@ -334,9 +274,7 @@ public sealed class MainWindow : Window
         _partyPanel.Children.Clear();
         for (var slot = 0; slot < 6; slot++)
         {
-            Control card = slot < _viewModel.Party.Count
-                ? PokemonCard(_viewModel.Party[slot], true)
-                : EmptyPartySlot();
+            Control card = slot < _viewModel.Party.Count ? PokemonCard(_viewModel.Party[slot], true) : EmptyPartySlot();
             Grid.SetRow(card, slot);
             _partyPanel.Children.Add(card);
         }
@@ -359,12 +297,7 @@ public sealed class MainWindow : Window
     private Control PokemonCard(PokemonCardViewModel pokemon, bool party)
     {
         var small = party && _compact;
-        var sprite = new Image
-        {
-            Width = small ? 34 : 52,
-            Height = small ? 34 : 52,
-            Stretch = Stretch.Uniform
-        };
+        var sprite = new Image { Width = small ? 34 : 52, Height = small ? 34 : 52, Stretch = Stretch.Uniform };
         var spriteFrame = new Border
         {
             Width = small ? 40 : 58,
@@ -375,7 +308,6 @@ public sealed class MainWindow : Window
             CornerRadius = new CornerRadius(8),
             Child = sprite
         };
-
         var text = new StackPanel { Spacing = small ? 1 : 3 };
         var name = Text(pokemon.NameLine, small ? 10 : 13, FontWeight.SemiBold, "#F8FAFC");
         name.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -420,25 +352,14 @@ public sealed class MainWindow : Window
             text.Children.Add(Text(pokemon.LevelText, 9, FontWeight.Medium, "#93C5FD"));
         }
 
-        var ownLayout = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
-            ColumnSpacing = small ? 6 : 9,
-            MinWidth = 0
-        };
+        var ownLayout = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = small ? 6 : 9, MinWidth = 0 };
         ownLayout.Children.Add(spriteFrame);
         Grid.SetColumn(text, 1);
         ownLayout.Children.Add(text);
-
         Control content = ownLayout;
         if (party && _networkService.State == SoulBuddyNetworkState.Connected)
         {
-            var completeLayout = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("3*,1*"),
-                ColumnSpacing = small ? 4 : 7,
-                MinWidth = 0
-            };
+            var completeLayout = new Grid { ColumnDefinitions = new ColumnDefinitions("3*,1*"), ColumnSpacing = small ? 4 : 7, MinWidth = 0 };
             completeLayout.Children.Add(ownLayout);
             var partner = BuildSoulLinkPanel(pokemon, small);
             Grid.SetColumn(partner, 1);
@@ -474,21 +395,12 @@ public sealed class MainWindow : Window
             Stretch = Stretch.Uniform,
             HorizontalAlignment = HorizontalAlignment.Center
         };
-        var label = Text(
-            linked ? fainted ? "KAMPFUNFÄHIG" : "VERKNÜPFT MIT" : "SOULLINK",
-            small ? 6 : 7,
-            FontWeight.Bold,
-            linked ? fainted ? "#FCA5A5" : "#86EFAC" : "#FBBF24");
+        var label = Text(linked ? fainted ? "KAMPFUNFÄHIG" : "VERKNÜPFT MIT" : "SOULLINK", small ? 6 : 7, FontWeight.Bold, linked ? fainted ? "#FCA5A5" : "#86EFAC" : "#FBBF24");
         label.TextAlignment = TextAlignment.Center;
-        var partnerName = Text(
-            linked ? pokemon.LinkedNameLine : "Noch nicht\nverknüpft",
-            small ? 7 : 8,
-            FontWeight.SemiBold,
-            linked ? "#F8FAFC" : "#FDE68A");
+        var partnerName = Text(linked ? pokemon.LinkedNameLine : "Noch nicht\nverknüpft", small ? 7 : 8, FontWeight.SemiBold, linked ? "#F8FAFC" : "#FDE68A");
         partnerName.TextAlignment = TextAlignment.Center;
         partnerName.TextWrapping = TextWrapping.Wrap;
         partnerName.MaxLines = 2;
-
         var stack = new StackPanel
         {
             Spacing = 1,
@@ -595,6 +507,8 @@ public sealed class MainWindow : Window
         ApplyResponsiveLayout();
         RenderParty();
         RenderStoredPokemon();
+        _lastRenderedNetworkState = _networkService.State;
+        _lastPartnerPartySignature = BuildPartnerPartySignature(_networkService.LatestRemoteSnapshot);
         await _viewModel.InitializeAsync();
     }
 
