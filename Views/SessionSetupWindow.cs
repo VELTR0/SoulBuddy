@@ -11,44 +11,37 @@ namespace SoulBuddy.Views;
 public sealed class SessionSetupWindow : Window
 {
     private readonly SessionStore _sessionStore = new();
-    private readonly TextBox _sessionIdBox;
     private readonly TextBox _playerNameBox;
     private readonly TextBlock _statusText;
-    private readonly Border _activeSessionCard;
-    private readonly TextBlock _activeSessionTitle;
-    private readonly TextBlock _activeSessionDetails;
+    private readonly Border _activePlayerCard;
+    private readonly TextBlock _activePlayerTitle;
     private SessionContext? _activeContext;
 
     public SessionSetupWindow()
     {
-        Title = "SoulBuddy · Session";
-        Width = 760;
-        Height = 650;
-        MinWidth = 640;
-        MinHeight = 560;
+        Title = "SoulBuddy";
+        Width = 620;
+        Height = 520;
+        MinWidth = 520;
+        MinHeight = 440;
         Background = Brush("#0B1220");
 
-        _sessionIdBox = CreateTextBox("z. B. meine-soullink-session");
         _playerNameBox = CreateTextBox("Dein Spielername");
-        _statusText = Text("", 13, FontWeight.Medium, "#CBD5E1");
+        _statusText = Text(string.Empty, 13, FontWeight.Medium, "#CBD5E1");
         _statusText.TextWrapping = TextWrapping.Wrap;
 
-        _activeSessionTitle = Text("", 20, FontWeight.Bold, "#F8FAFC");
-        _activeSessionDetails = Text("", 14, FontWeight.Normal, "#CBD5E1");
-        _activeSessionDetails.TextWrapping = TextWrapping.Wrap;
-
-        _activeSessionCard = CreateCard(new StackPanel
+        _activePlayerTitle = Text(string.Empty, 20, FontWeight.Bold, "#F8FAFC");
+        _activePlayerCard = CreateCard(new StackPanel
         {
             Spacing = 10,
             Children =
             {
-                Text("Zuletzt aktive Session", 12, FontWeight.Bold, "#93C5FD"),
-                _activeSessionTitle,
-                _activeSessionDetails,
-                CreateButton("Session fortsetzen", ContinueActiveSessionAsync, true)
+                Text("Zuletzt verwendet", 12, FontWeight.Bold, "#93C5FD"),
+                _activePlayerTitle,
+                CreateButton("Mit diesem Namen starten", ContinueAsync, true)
             }
         });
-        _activeSessionCard.IsVisible = false;
+        _activePlayerCard.IsVisible = false;
 
         Content = BuildLayout();
         Opened += OnOpened;
@@ -64,36 +57,17 @@ public sealed class SessionSetupWindow : Window
 
         content.Children.Add(Text("SoulBuddy", 36, FontWeight.Bold, "#F8FAFC"));
         content.Children.Add(Text(
-            "Erstelle eine neue SoulLink-Session oder tritt mit einer frei gewählten Session-ID bei.",
+            "Gib deinen Spielernamen ein. SoulBuddy sucht anschließend automatisch nach einem Mitspieler im lokalen Netzwerk.",
             15,
             FontWeight.Normal,
             "#94A3B8"));
-        content.Children.Add(_activeSessionCard);
+        content.Children.Add(_activePlayerCard);
 
         var form = new StackPanel { Spacing = 12 };
-        form.Children.Add(CreateLabel("Session-ID"));
-        form.Children.Add(_sessionIdBox);
-        form.Children.Add(Text(
-            "Groß-/Kleinschreibung wird ignoriert. Leerzeichen und Sonderzeichen werden automatisch in Bindestriche umgewandelt.",
-            12,
-            FontWeight.Normal,
-            "#7C8BA1"));
         form.Children.Add(CreateLabel("Spielername"));
         form.Children.Add(_playerNameBox);
-
-        var buttonGrid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("*,*"),
-            ColumnSpacing = 12,
-            Margin = new Thickness(0, 6, 0, 0)
-        };
-        buttonGrid.Children.Add(CreateButton("Session erstellen", CreateSessionAsync, true));
-        var joinButton = CreateButton("Session beitreten", JoinSessionAsync, false);
-        Grid.SetColumn(joinButton, 1);
-        buttonGrid.Children.Add(joinButton);
-        form.Children.Add(buttonGrid);
+        form.Children.Add(CreateButton("Starten", StartAsync, true));
         form.Children.Add(_statusText);
-
         content.Children.Add(CreateCard(form));
 
         return new ScrollViewer
@@ -105,55 +79,39 @@ public sealed class SessionSetupWindow : Window
 
     private async void OnOpened(object? sender, EventArgs eventArgs)
     {
-        await LoadActiveSessionAsync();
+        await LoadActivePlayerAsync();
     }
 
-    private async Task LoadActiveSessionAsync()
+    private async Task LoadActivePlayerAsync()
     {
         try
         {
             _activeContext = await _sessionStore.LoadActiveAsync();
             if (_activeContext is null)
             {
-                _activeSessionCard.IsVisible = false;
+                _activePlayerCard.IsVisible = false;
                 return;
             }
 
-            _activeSessionTitle.Text = $"Session {_activeContext.Session.Id}";
-            _activeSessionDetails.Text =
-                $"Spieler: {_activeContext.LocalPlayer.DisplayName} · Slot {_activeContext.LocalPlayer.Slot}\n" +
-                $"Teilnehmer: {_activeContext.Session.Players.Count}/2";
-            _activeSessionCard.IsVisible = true;
+            _activePlayerTitle.Text = _activeContext.LocalPlayer.DisplayName;
+            _activePlayerCard.IsVisible = true;
         }
         catch (Exception ex)
         {
-            SetStatus($"Die aktive Session konnte nicht geladen werden: {ex.Message}", true);
+            SetStatus($"Das lokale Spielerprofil konnte nicht geladen werden: {ex.Message}", true);
         }
     }
 
-    private async Task CreateSessionAsync()
+    private async Task StartAsync()
     {
         await ExecuteAsync(async () =>
         {
-            var context = await _sessionStore.CreateAsync(
-                _sessionIdBox.Text ?? string.Empty,
-                _playerNameBox.Text ?? string.Empty);
+            var context = await _sessionStore.StartAsync(_playerNameBox.Text ?? string.Empty);
             OpenMainWindow(context);
         });
     }
 
-    private async Task JoinSessionAsync()
-    {
-        await ExecuteAsync(async () =>
-        {
-            var context = await _sessionStore.JoinAsync(
-                _sessionIdBox.Text ?? string.Empty,
-                _playerNameBox.Text ?? string.Empty);
-            OpenMainWindow(context);
-        });
-    }
-
-    private Task ContinueActiveSessionAsync()
+    private Task ContinueAsync()
     {
         if (_activeContext is not null)
         {
@@ -167,7 +125,7 @@ public sealed class SessionSetupWindow : Window
     {
         try
         {
-            SetStatus("Session wird gespeichert …", false);
+            SetStatus("SoulBuddy wird gestartet …", false);
             await action();
         }
         catch (Exception ex)
@@ -189,28 +147,22 @@ public sealed class SessionSetupWindow : Window
         _statusText.Foreground = Brush(isError ? "#FCA5A5" : "#A7F3D0");
     }
 
-    private static TextBox CreateTextBox(string placeholderText)
+    private static TextBox CreateTextBox(string placeholderText) => new()
     {
-        return new TextBox
-        {
-            PlaceholderText = placeholderText,
-            FontSize = 15,
-            Padding = new Thickness(13, 11),
-            Background = Brush("#0F1829"),
-            Foreground = Brush("#F8FAFC"),
-            BorderBrush = Brush("#344763"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(9)
-        };
-    }
+        PlaceholderText = placeholderText,
+        FontSize = 15,
+        Padding = new Thickness(13, 11),
+        Background = Brush("#0F1829"),
+        Foreground = Brush("#F8FAFC"),
+        BorderBrush = Brush("#344763"),
+        BorderThickness = new Thickness(1),
+        CornerRadius = new CornerRadius(9)
+    };
 
     private static TextBlock CreateLabel(string value) =>
         Text(value, 14, FontWeight.SemiBold, "#E2E8F0");
 
-    private static Button CreateButton(
-        string text,
-        Func<Task> action,
-        bool primary)
+    private static Button CreateButton(string text, Func<Task> action, bool primary)
     {
         var button = new Button
         {
@@ -230,34 +182,23 @@ public sealed class SessionSetupWindow : Window
         return button;
     }
 
-    private static Border CreateCard(Control child)
+    private static Border CreateCard(Control child) => new()
     {
-        return new Border
-        {
-            Background = Brush("#151F33"),
-            BorderBrush = Brush("#2B3C58"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(15),
-            Padding = new Thickness(22),
-            Child = child
-        };
-    }
+        Background = Brush("#151F33"),
+        BorderBrush = Brush("#2B3C58"),
+        BorderThickness = new Thickness(1),
+        CornerRadius = new CornerRadius(15),
+        Padding = new Thickness(22),
+        Child = child
+    };
 
-    private static TextBlock Text(
-        string value,
-        double fontSize,
-        FontWeight fontWeight,
-        string color)
+    private static TextBlock Text(string value, double fontSize, FontWeight fontWeight, string color) => new()
     {
-        return new TextBlock
-        {
-            Text = value,
-            FontSize = fontSize,
-            FontWeight = fontWeight,
-            Foreground = Brush(color)
-        };
-    }
+        Text = value,
+        FontSize = fontSize,
+        FontWeight = fontWeight,
+        Foreground = Brush(color)
+    };
 
-    private static SolidColorBrush Brush(string color) =>
-        new(Color.Parse(color));
+    private static SolidColorBrush Brush(string color) => new(Color.Parse(color));
 }
