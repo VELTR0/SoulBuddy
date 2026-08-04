@@ -36,6 +36,8 @@ public sealed class ActiveSession
     public required string SessionId { get; init; }
 
     public required string PlayerId { get; init; }
+
+    public SessionLaunchMode LaunchMode { get; init; } = SessionLaunchMode.Continue;
 }
 
 public sealed class SessionContext
