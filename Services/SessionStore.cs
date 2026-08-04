@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using SoulBuddy.Models;
 
 namespace SoulBuddy.Services;
@@ -13,113 +12,55 @@ public sealed class SessionStore
         WriteIndented = true
     };
 
-    private readonly string _sessionsDirectory;
+    private readonly string _sessionPath;
     private readonly string _activeSessionPath;
 
     public SessionStore(string? baseDirectory = null)
     {
         var root = baseDirectory ?? Path.Combine(AppContext.BaseDirectory, "data");
-        _sessionsDirectory = Path.Combine(root, "sessions");
-        _activeSessionPath = Path.Combine(root, "active-session.json");
-        Directory.CreateDirectory(_sessionsDirectory);
+        _sessionPath = Path.Combine(root, "local-player.json");
+        _activeSessionPath = Path.Combine(root, "active-player.json");
+        Directory.CreateDirectory(root);
     }
 
-    public static string NormalizeSessionId(string value)
-    {
-        var normalized = value.Trim().ToLowerInvariant();
-        normalized = Regex.Replace(normalized, "[^a-z0-9]+", "-");
-        normalized = Regex.Replace(normalized, "-+", "-").Trim('-');
-
-        if (string.IsNullOrWhiteSpace(normalized))
-        {
-            throw new ArgumentException("Die Session-ID enthält keine gültigen Zeichen.", nameof(value));
-        }
-
-        return normalized;
-    }
-
-    public async Task<SessionContext> CreateAsync(
-        string sessionId,
+    public async Task<SessionContext> StartAsync(
         string playerName,
         CancellationToken cancellationToken = default)
     {
-        var normalizedId = NormalizeSessionId(sessionId);
         ValidatePlayerName(playerName);
 
-        var path = GetSessionPath(normalizedId);
-        if (File.Exists(path))
+        var normalizedName = playerName.Trim();
+        var existing = await LoadSessionAsync(cancellationToken);
+        var localPlayer = existing?.Players.FirstOrDefault(player =>
+            string.Equals(player.DisplayName, normalizedName, StringComparison.OrdinalIgnoreCase));
+
+        if (localPlayer is null)
         {
-            throw new InvalidOperationException("Diese Session existiert lokal bereits. Nutze stattdessen ‚Beitreten‘.");
-        }
-
-        var localPlayer = CreatePlayer(playerName, 1);
-        var session = new SoulLinkSession
-        {
-            Id = normalizedId,
-            Players = [localPlayer]
-        };
-
-        await SaveSessionAsync(session, cancellationToken);
-        await SaveActiveSessionAsync(
-            session.Id,
-            localPlayer.Id,
-            SessionLaunchMode.Host,
-            cancellationToken);
-
-        return new SessionContext
-        {
-            Session = session,
-            LocalPlayer = localPlayer,
-            LaunchMode = SessionLaunchMode.Host
-        };
-    }
-
-    public async Task<SessionContext> JoinAsync(
-        string sessionId,
-        string playerName,
-        CancellationToken cancellationToken = default)
-    {
-        var normalizedId = NormalizeSessionId(sessionId);
-        ValidatePlayerName(playerName);
-
-        var session = await LoadSessionAsync(normalizedId, cancellationToken)
-            ?? new SoulLinkSession
+            localPlayer = new SessionPlayer
             {
-                Id = normalizedId
+                Id = Guid.NewGuid().ToString("N"),
+                DisplayName = normalizedName,
+                Slot = 1
             };
-
-        var existingPlayer = session.Players.FirstOrDefault(player =>
-            string.Equals(player.DisplayName, playerName.Trim(), StringComparison.OrdinalIgnoreCase));
-
-        SessionPlayer localPlayer;
-        if (existingPlayer is not null)
-        {
-            localPlayer = existingPlayer;
         }
         else
         {
-            if (session.Players.Count >= 2)
-            {
-                throw new InvalidOperationException("Diese SoulLink-Session hat bereits zwei Spieler.");
-            }
-
-            localPlayer = CreatePlayer(playerName, session.Players.Count + 1);
-            session.Players.Add(localPlayer);
-            session.UpdatedAtUtc = DateTimeOffset.UtcNow;
-            await SaveSessionAsync(session, cancellationToken);
+            localPlayer.DisplayName = normalizedName;
         }
 
-        await SaveActiveSessionAsync(
-            session.Id,
-            localPlayer.Id,
-            SessionLaunchMode.Join,
-            cancellationToken);
+        var session = existing ?? new SoulLinkSession();
+        session.Players.Clear();
+        session.Players.Add(localPlayer);
+        session.UpdatedAtUtc = DateTimeOffset.UtcNow;
+
+        await SaveSessionAsync(session, cancellationToken);
+        await SaveActiveSessionAsync(localPlayer.Id, cancellationToken);
 
         return new SessionContext
         {
             Session = session,
             LocalPlayer = localPlayer,
-            LaunchMode = SessionLaunchMode.Join
+            LaunchMode = SessionLaunchMode.Auto
         };
     }
 
@@ -142,7 +83,7 @@ public sealed class SessionStore
             return null;
         }
 
-        var session = await LoadSessionAsync(active.SessionId, cancellationToken);
+        var session = await LoadSessionAsync(cancellationToken);
         var player = session?.Players.FirstOrDefault(item => item.Id == active.PlayerId);
 
         if (session is null || player is null)
@@ -154,23 +95,19 @@ public sealed class SessionStore
         {
             Session = session,
             LocalPlayer = player,
-            LaunchMode = active.LaunchMode
+            LaunchMode = SessionLaunchMode.Auto
         };
     }
 
-    public async Task<SoulLinkSession?> LoadSessionAsync(
-        string sessionId,
-        CancellationToken cancellationToken = default)
+    private async Task<SoulLinkSession?> LoadSessionAsync(
+        CancellationToken cancellationToken)
     {
-        var normalizedId = NormalizeSessionId(sessionId);
-        var path = GetSessionPath(normalizedId);
-
-        if (!File.Exists(path))
+        if (!File.Exists(_sessionPath))
         {
             return null;
         }
 
-        await using var stream = File.OpenRead(path);
+        await using var stream = File.OpenRead(_sessionPath);
         return await JsonSerializer.DeserializeAsync<SoulLinkSession>(
             stream,
             JsonOptions,
@@ -182,33 +119,19 @@ public sealed class SessionStore
         CancellationToken cancellationToken)
     {
         var json = JsonSerializer.Serialize(session, JsonOptions);
-        await WriteAtomicallyAsync(GetSessionPath(session.Id), json, cancellationToken);
+        await WriteAtomicallyAsync(_sessionPath, json, cancellationToken);
     }
 
     private async Task SaveActiveSessionAsync(
-        string sessionId,
         string playerId,
-        SessionLaunchMode launchMode,
         CancellationToken cancellationToken)
     {
         var active = new ActiveSession
         {
-            SessionId = sessionId,
-            PlayerId = playerId,
-            LaunchMode = launchMode
+            PlayerId = playerId
         };
         var json = JsonSerializer.Serialize(active, JsonOptions);
         await WriteAtomicallyAsync(_activeSessionPath, json, cancellationToken);
-    }
-
-    private static SessionPlayer CreatePlayer(string displayName, int slot)
-    {
-        return new SessionPlayer
-        {
-            Id = Guid.NewGuid().ToString("N"),
-            DisplayName = displayName.Trim(),
-            Slot = slot
-        };
     }
 
     private static void ValidatePlayerName(string playerName)
@@ -218,9 +141,6 @@ public sealed class SessionStore
             throw new ArgumentException("Bitte gib einen Spielernamen ein.", nameof(playerName));
         }
     }
-
-    private string GetSessionPath(string sessionId) =>
-        Path.Combine(_sessionsDirectory, $"{sessionId}.json");
 
     private static async Task WriteAtomicallyAsync(
         string path,
