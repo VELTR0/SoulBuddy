@@ -6,17 +6,13 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using SoulBuddy.Models;
 using SoulBuddy.ViewModels;
 using SoulBuddy.Views;
 
 namespace SoulBuddy.Services;
 
-/// <summary>
-/// Updates the six visible team cards directly from MainWindow's party data.
-/// This deliberately avoids visual-tree heuristics, so layout changes cannot
-/// break SoulLink matching.
-/// </summary>
 internal static class DirectSoulLinkUiUpdater
 {
     private static readonly FieldInfo? PartyPanelField = typeof(MainWindow).GetField(
@@ -60,13 +56,14 @@ internal static class DirectSoulLinkUiUpdater
             ? network?.LatestRemoteSnapshot?.Party ?? []
             : [];
 
-        foreach (var window in desktop.Windows.OfType<MainWindow>())
+        var windows = desktop.Windows.OfType<MainWindow>().ToArray();
+        foreach (var window in windows)
         {
             UpdateConnectionHeadline(window, connected);
             UpdateTeamCards(window, remoteParty);
         }
 
-        RemoveDetachedViews(desktop.Windows.OfType<MainWindow>());
+        RemoveDetachedViews(windows);
     }
 
     private static void UpdateConnectionHeadline(MainWindow window, bool connected)
@@ -77,7 +74,10 @@ internal static class DirectSoulLinkUiUpdater
             {
                 text.IsVisible = !connected;
                 text.Height = connected ? 0 : double.NaN;
-                text.Margin = connected ? new Thickness(0) : text.Margin;
+                if (connected)
+                {
+                    text.Margin = new Thickness(0);
+                }
             }
         }
     }
@@ -158,7 +158,6 @@ internal static class DirectSoulLinkUiUpdater
             return null;
         }
 
-        // Hide the original one-line placeholder but keep it in the local area.
         var oldLink = originalContent
             .GetVisualDescendants()
             .OfType<TextBlock>()
