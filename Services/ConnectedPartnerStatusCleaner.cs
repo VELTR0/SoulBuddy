@@ -9,9 +9,8 @@ using Avalonia.VisualTree;
 namespace SoulBuddy.Services;
 
 /// <summary>
-/// Keeps the legacy partner headline in sync with the real network state.
-/// The headline was originally created as static text in MainWindow and is
-/// therefore not affected by the normal network-status binding.
+/// Hides the legacy partner headline while the real network status below it
+/// already reports an active connection.
 /// </summary>
 internal static class ConnectedPartnerStatusCleaner
 {
@@ -41,24 +40,36 @@ internal static class ConnectedPartnerStatusCleaner
 
         var network = SoulBuddyNetworkService.Current;
         var connected = network?.State == SoulBuddyNetworkState.Connected;
+        var connectedText = connected && !string.IsNullOrWhiteSpace(network?.RemotePlayerName)
+            ? $"🟢 {network.RemotePlayerName} verbunden"
+            : string.Empty;
 
         foreach (var window in desktop.Windows)
         {
             foreach (var text in window.GetVisualDescendants().OfType<TextBlock>())
             {
-                if (text.Text is not ("🟡 Nicht verbunden" or "🟡 Lokal eingetragen"))
+                var isLegacyHeadline = text.Text is "🟡 Nicht verbunden" or
+                    "🟡 Lokal eingetragen" ||
+                    (!string.IsNullOrEmpty(connectedText) &&
+                     string.Equals(text.Text, connectedText, StringComparison.Ordinal));
+
+                if (!isLegacyHeadline)
                 {
                     continue;
                 }
 
                 if (connected)
                 {
-                    text.Text = $"🟢 {network!.RemotePlayerName} verbunden";
-                    text.Foreground = new SolidColorBrush(Color.Parse("#4ADE80"));
+                    text.IsVisible = false;
+                    text.Height = 0;
+                    text.Margin = new Thickness(0);
                 }
                 else
                 {
                     text.Text = "🟡 Nicht verbunden";
+                    text.IsVisible = true;
+                    text.Height = double.NaN;
+                    text.Margin = new Thickness(0);
                     text.Foreground = new SolidColorBrush(Color.Parse("#FBBF24"));
                 }
             }
