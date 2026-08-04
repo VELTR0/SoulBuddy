@@ -54,6 +54,7 @@ internal static class AutomaticSessionNetworking
         foreach (var window in desktop.Windows.OfType<MainWindow>())
         {
             HideManualNetworkButtons(window);
+            RemoveLegacySessionNameUi(window);
 
             if (!StartedWindows.Add(window))
             {
@@ -62,6 +63,34 @@ internal static class AutomaticSessionNetworking
 
             window.Closed += (_, _) => StartedWindows.Remove(window);
             _ = StartForWindowAsync(window);
+        }
+    }
+
+    private static void RemoveLegacySessionNameUi(MainWindow window)
+    {
+        if (ContextField?.GetValue(window) is not SessionContext context)
+        {
+            return;
+        }
+
+        window.Title = $"SoulBuddy · {context.LocalPlayer.DisplayName}";
+
+        // MainWindow historically rendered Session.Name above the ID. Since a
+        // session is now identified exclusively by its ID, hide that redundant
+        // legacy text line while keeping the explicit "ID: ..." line visible.
+        var redundantTitle = window
+            .GetVisualDescendants()
+            .OfType<TextBlock>()
+            .FirstOrDefault(text => string.Equals(
+                text.Text,
+                context.Session.Id,
+                StringComparison.OrdinalIgnoreCase));
+
+        if (redundantTitle is not null)
+        {
+            redundantTitle.IsVisible = false;
+            redundantTitle.Height = 0;
+            redundantTitle.Margin = new Thickness(0);
         }
     }
 
