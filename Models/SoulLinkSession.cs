@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace SoulBuddy.Models;
 
 public enum SessionLaunchMode
@@ -7,6 +9,14 @@ public enum SessionLaunchMode
 
 public sealed class SoulLinkSession
 {
+    // Compatibility-only accessors for older UI code. They carry no identity,
+    // are never persisted and are removed from the visible interface.
+    [JsonIgnore]
+    public string Id => string.Empty;
+
+    [JsonIgnore]
+    public string Name => string.Empty;
+
     public DateTimeOffset CreatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
