@@ -25,6 +25,9 @@ public sealed class SessionStore
 
     public async Task<SessionContext> StartAsync(
         string playerName,
+        bool soullockeEnabled = false,
+        string soullockeLink = "",
+        string soullockePassword = "",
         CancellationToken cancellationToken = default)
     {
         ValidatePlayerName(playerName);
@@ -54,13 +57,21 @@ public sealed class SessionStore
         session.UpdatedAtUtc = DateTimeOffset.UtcNow;
 
         await SaveSessionAsync(session, cancellationToken);
-        await SaveActiveSessionAsync(localPlayer.Id, cancellationToken);
+        await SaveActiveSessionAsync(
+            localPlayer.Id,
+            soullockeEnabled,
+            soullockeLink,
+            soullockePassword,
+            cancellationToken);
 
         return new SessionContext
         {
             Session = session,
             LocalPlayer = localPlayer,
-            LaunchMode = SessionLaunchMode.Auto
+            LaunchMode = SessionLaunchMode.Auto,
+            SoullockeEnabled = soullockeEnabled,
+            SoullockeLink = soullockeEnabled ? soullockeLink.Trim() : string.Empty,
+            SoullockePassword = soullockeEnabled ? soullockePassword : string.Empty
         };
     }
 
@@ -95,7 +106,10 @@ public sealed class SessionStore
         {
             Session = session,
             LocalPlayer = player,
-            LaunchMode = SessionLaunchMode.Auto
+            LaunchMode = SessionLaunchMode.Auto,
+            SoullockeEnabled = active.SoullockeEnabled,
+            SoullockeLink = active.SoullockeLink,
+            SoullockePassword = active.SoullockePassword
         };
     }
 
@@ -124,11 +138,17 @@ public sealed class SessionStore
 
     private async Task SaveActiveSessionAsync(
         string playerId,
+        bool soullockeEnabled,
+        string soullockeLink,
+        string soullockePassword,
         CancellationToken cancellationToken)
     {
         var active = new ActiveSession
         {
-            PlayerId = playerId
+            PlayerId = playerId,
+            SoullockeEnabled = soullockeEnabled,
+            SoullockeLink = soullockeEnabled ? soullockeLink.Trim() : string.Empty,
+            SoullockePassword = soullockeEnabled ? soullockePassword : string.Empty
         };
         var json = JsonSerializer.Serialize(active, JsonOptions);
         await WriteAtomicallyAsync(_activeSessionPath, json, cancellationToken);
