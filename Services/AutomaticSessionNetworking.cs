@@ -11,9 +11,9 @@ using SoulBuddy.Views;
 namespace SoulBuddy.Services;
 
 /// <summary>
-/// Starts SoulBuddy networking automatically. Every client first searches the
-/// local network. If no peer is available, one client takes over hosting after
-/// a short randomized delay while the other keeps searching.
+/// Starts SoulBuddy networking automatically. Every LAN client first searches
+/// for a peer and one takes over hosting when needed. In Soullocke mode this
+/// service deliberately remains inactive.
 /// </summary>
 internal static class AutomaticSessionNetworking
 {
@@ -63,7 +63,11 @@ internal static class AutomaticSessionNetworking
             }
 
             window.Closed += (_, _) => StartedWindows.Remove(window);
-            _ = StartForWindowAsync(window);
+
+            if (!SoullockeLaunchSettings.Enabled)
+            {
+                _ = StartForWindowAsync(window);
+            }
         }
     }
 
@@ -108,7 +112,8 @@ internal static class AutomaticSessionNetworking
     {
         await Task.Delay(350);
 
-        if (ContextField?.GetValue(window) is not SessionContext context ||
+        if (SoullockeLaunchSettings.Enabled ||
+            ContextField?.GetValue(window) is not SessionContext context ||
             NetworkField?.GetValue(window) is not SoulBuddyNetworkService network)
         {
             return;
@@ -140,8 +145,6 @@ internal static class AutomaticSessionNetworking
         }
         catch
         {
-            // If another client won the host race, resume discovery instead of
-            // surfacing a transient port-conflict to the user.
             await Task.Delay(Random.Shared.Next(350, 900));
             if (network.State != SoulBuddyNetworkState.Connected)
             {
