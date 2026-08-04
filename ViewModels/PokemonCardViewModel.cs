@@ -1,3 +1,6 @@
+using SoulBuddy.Models;
+using SoulBuddy.Services;
+
 namespace SoulBuddy.ViewModels;
 
 public sealed class PokemonCardViewModel
@@ -17,14 +20,69 @@ public sealed class PokemonCardViewModel
     public string Pokeball { get; init; } = string.Empty;
     public bool IsShiny { get; init; }
 
-    // SoulLink data is calculated in MainWindowViewModel before the card is
-    // rendered. The UI therefore does not need to search or modify its own
-    // visual tree after creation.
-    public bool IsSoulLinked { get; init; }
-    public string LinkedDisplayName { get; init; } = string.Empty;
-    public string LinkedSpecies { get; init; } = string.Empty;
-    public int LinkedSpeciesId { get; init; }
-    public int LinkedCurrentHp { get; init; } = -1;
+    // These optional values allow explicit links later (for example when
+    // Phase 4 introduces manual corrections). Until then the current remote
+    // snapshot is resolved deterministically by location and identity.
+    public bool HasExplicitSoulLink { get; init; }
+    public string ExplicitLinkedDisplayName { get; init; } = string.Empty;
+    public string ExplicitLinkedSpecies { get; init; } = string.Empty;
+    public int ExplicitLinkedSpeciesId { get; init; }
+    public int ExplicitLinkedCurrentHp { get; init; } = -1;
+
+    private NetworkPokemonSnapshot? ResolvedSoulLink
+    {
+        get
+        {
+            var network = SoulBuddyNetworkService.Current;
+            if (network?.State != SoulBuddyNetworkState.Connected)
+            {
+                return null;
+            }
+
+            var remoteParty = network.LatestRemoteSnapshot?.Party;
+            if (remoteParty is null || remoteParty.Count == 0)
+            {
+                return null;
+            }
+
+            var location = NormalizeLocation(Subtitle);
+            var byLocation = remoteParty.FirstOrDefault(remote =>
+                location.Length > 0 &&
+                NormalizeLocation(remote.Location) == location);
+            if (byLocation is not null)
+            {
+                return byLocation;
+            }
+
+            var display = Normalize(DisplayName);
+            var species = Normalize(Species);
+            return remoteParty.FirstOrDefault(remote =>
+                (Level <= 0 || remote.Level == Level) &&
+                (display == Normalize(remote.DisplayName) ||
+                 display == Normalize(remote.SpeciesName) ||
+                 species == Normalize(remote.DisplayName) ||
+                 species == Normalize(remote.SpeciesName)));
+        }
+    }
+
+    public bool IsSoulLinked => HasExplicitSoulLink || ResolvedSoulLink is not null;
+
+    public string LinkedDisplayName => HasExplicitSoulLink
+        ? ExplicitLinkedDisplayName
+        : ResolvedSoulLink?.DisplayName ?? string.Empty;
+
+    public string LinkedSpecies => HasExplicitSoulLink
+        ? ExplicitLinkedSpecies
+        : ResolvedSoulLink?.SpeciesName ?? string.Empty;
+
+    public int LinkedSpeciesId => HasExplicitSoulLink
+        ? ExplicitLinkedSpeciesId
+        : ResolvedSoulLink?.SpeciesId ?? 0;
+
+    public int LinkedCurrentHp => HasExplicitSoulLink
+        ? ExplicitLinkedCurrentHp
+        : ResolvedSoulLink?.CurrentHp ?? -1;
+
     public bool LinkedIsFainted => IsSoulLinked &&
                                    (CurrentHp == 0 || LinkedCurrentHp == 0);
 
@@ -68,4 +126,20 @@ public sealed class PokemonCardViewModel
     public double HpPercentage => MaxHp <= 0
         ? 0
         : Math.Clamp(CurrentHp * 100d / MaxHp, 0, 100);
+
+    private static string NormalizeLocation(string value)
+    {
+        var normalized = Normalize(value);
+        return normalized switch
+        {
+            "starter" or "newborkia" or "newbarktown" => "starter",
+            _ => normalized
+        };
+    }
+
+    private static string Normalize(string value) => new(value
+        .Trim()
+        .ToLowerInvariant()
+        .Where(char.IsLetterOrDigit)
+        .ToArray());
 }
