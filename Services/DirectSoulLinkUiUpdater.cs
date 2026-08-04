@@ -59,27 +59,10 @@ internal static class DirectSoulLinkUiUpdater
         var windows = desktop.Windows.OfType<MainWindow>().ToArray();
         foreach (var window in windows)
         {
-            UpdateConnectionHeadline(window, connected);
             UpdateTeamCards(window, remoteParty);
         }
 
         RemoveDetachedViews(windows);
-    }
-
-    private static void UpdateConnectionHeadline(MainWindow window, bool connected)
-    {
-        foreach (var text in window.GetVisualDescendants().OfType<TextBlock>())
-        {
-            if (text.Text is "🟡 Nicht verbunden" or "🟡 Lokal eingetragen")
-            {
-                text.IsVisible = !connected;
-                text.Height = connected ? 0 : double.NaN;
-                if (connected)
-                {
-                    text.Margin = new Thickness(0);
-                }
-            }
-        }
     }
 
     private static void UpdateTeamCards(
@@ -92,10 +75,15 @@ internal static class DirectSoulLinkUiUpdater
             return;
         }
 
-        var cards = partyPanel.Children
+        // MainWindowLayoutUpdater moves the six cards into nested two-column
+        // grids. Therefore direct Children.OfType<Button>() no longer finds
+        // them. Search the complete party subtree instead.
+        var cards = partyPanel
+            .GetVisualDescendants()
             .OfType<Button>()
-            .OrderBy(card => Grid.GetRow(card))
-            .ThenBy(card => Grid.GetColumn(card))
+            .Where(IsPartyPokemonCard)
+            .OrderBy(GetPartyCardOrder)
+            .Take(6)
             .ToArray();
 
         var localParty = viewModel.Party.ToArray();
@@ -144,6 +132,22 @@ internal static class DirectSoulLinkUiUpdater
                 match.Pokemon,
                 local.CurrentHp == 0 || match.Pokemon.CurrentHp == 0);
         }
+    }
+
+    private static bool IsPartyPokemonCard(Button card)
+    {
+        var texts = card.GetVisualDescendants().OfType<TextBlock>();
+        return texts.Any(text =>
+            text.Text?.StartsWith("📍", StringComparison.Ordinal) == true);
+    }
+
+    private static int GetPartyCardOrder(Button card)
+    {
+        // After the two-column layout, each card carries its final row/column.
+        // Before that transformation, the old six-row position is sufficient.
+        var row = Grid.GetRow(card);
+        var column = Grid.GetColumn(card);
+        return row * 2 + column;
     }
 
     private static PartnerView? GetOrCreateView(Button card)
@@ -328,7 +332,9 @@ internal static class DirectSoulLinkUiUpdater
         var liveCards = windows
             .SelectMany(window =>
                 PartyPanelField?.GetValue(window) is Grid panel
-                    ? panel.Children.OfType<Button>()
+                    ? panel.GetVisualDescendants()
+                        .OfType<Button>()
+                        .Where(IsPartyPokemonCard)
                     : [])
             .ToHashSet();
 
