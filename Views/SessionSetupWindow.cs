@@ -89,7 +89,7 @@ public sealed class SessionSetupWindow : Window
         form.Children.Add(CreateLabel("Soullocke-Passwort"));
         form.Children.Add(_soullockePasswordBox);
         form.Children.Add(Text(
-            "Bei aktiviertem Soullocke-Sync wird das lokale Netzwerk nicht verwendet. Das Passwort wird nur im Arbeitsspeicher gehalten und nicht lokal gespeichert.",
+            "Bei aktiviertem Soullocke-Sync werden Link und Passwort lokal im Spielerprofil gespeichert. Das lokale Netzwerk wird dann nicht verwendet.",
             11,
             FontWeight.Normal,
             "#7C8BA1"));
@@ -130,6 +130,11 @@ public sealed class SessionSetupWindow : Window
             }
 
             _activePlayerTitle.Text = _activeContext.LocalPlayer.DisplayName;
+            _playerNameBox.Text = _activeContext.LocalPlayer.DisplayName;
+            _soullockeCheckBox.IsChecked = _activeContext.SoullockeEnabled;
+            _soullockeLinkBox.Text = _activeContext.SoullockeLink;
+            _soullockePasswordBox.Text = _activeContext.SoullockePassword;
+            UpdateSoullockeFieldState();
             _activePlayerCard.IsVisible = true;
         }
         catch (Exception ex)
@@ -147,14 +152,7 @@ public sealed class SessionSetupWindow : Window
             var link = _soullockeLinkBox.Text ?? string.Empty;
             var password = _soullockePasswordBox.Text ?? string.Empty;
 
-            if (useSoullocke)
-            {
-                _ = SoullockeLaunchSettings.ExtractSessionId(link);
-                if (string.IsNullOrWhiteSpace(password))
-                {
-                    throw new ArgumentException("Bitte gib das Soullocke-Passwort ein.");
-                }
-            }
+            ValidateSoullockeInput(useSoullocke, link, password);
 
             SoullockeLaunchSettings.Configure(
                 useSoullocke,
@@ -162,24 +160,54 @@ public sealed class SessionSetupWindow : Window
                 password,
                 playerName);
 
-            var context = await _sessionStore.StartAsync(playerName);
+            var context = await _sessionStore.StartAsync(
+                playerName,
+                useSoullocke,
+                link,
+                password);
             OpenMainWindow(context);
         });
     }
 
-    private Task ContinueAsync()
+    private async Task ContinueAsync()
     {
-        if (_activeContext is not null)
+        if (_activeContext is null)
         {
-            SoullockeLaunchSettings.Configure(
-                false,
-                string.Empty,
-                string.Empty,
-                _activeContext.LocalPlayer.DisplayName);
-            OpenMainWindow(_activeContext);
+            return;
         }
 
-        return Task.CompletedTask;
+        await ExecuteAsync(() =>
+        {
+            ValidateSoullockeInput(
+                _activeContext.SoullockeEnabled,
+                _activeContext.SoullockeLink,
+                _activeContext.SoullockePassword);
+
+            SoullockeLaunchSettings.Configure(
+                _activeContext.SoullockeEnabled,
+                _activeContext.SoullockeLink,
+                _activeContext.SoullockePassword,
+                _activeContext.LocalPlayer.DisplayName);
+            OpenMainWindow(_activeContext);
+            return Task.CompletedTask;
+        });
+    }
+
+    private static void ValidateSoullockeInput(
+        bool enabled,
+        string link,
+        string password)
+    {
+        if (!enabled)
+        {
+            return;
+        }
+
+        _ = SoullockeLaunchSettings.ExtractSessionId(link);
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            throw new ArgumentException("Bitte gib das Soullocke-Passwort ein.");
+        }
     }
 
     private async Task ExecuteAsync(Func<Task> action)
