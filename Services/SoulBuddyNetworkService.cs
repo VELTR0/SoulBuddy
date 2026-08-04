@@ -29,6 +29,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     public const int DefaultTcpPort = 45831;
     private const int DiscoveryPort = 45832;
     private const int ProtocolVersion = 1;
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(1);
 
     private readonly object _sync = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -74,7 +75,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     public void PrepareHost(string sessionId, string playerName)
     {
         Prepare(SoulBuddyNetworkMode.Host, sessionId, playerName);
-        StartBackground(HostAsync);
+        StartBackground(HostLoopAsync);
     }
 
     public void PrepareJoin(string sessionId, string playerName)
@@ -89,14 +90,22 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
     {
         JoinAddress = internetAddress?.Trim() ?? string.Empty;
         Prepare(SoulBuddyNetworkMode.Join, sessionId, playerName);
-        StartBackground(DiscoverAndJoinAsync);
+        StartBackground(JoinLoopAsync);
     }
 
     public async Task SendPlayerSnapshotAsync(
         NetworkPlayerSnapshot snapshot,
         CancellationToken cancellationToken = default)
     {
-        if (State != SoulBuddyNetworkState.Connected || _writer is null)
+        StreamWriter? writer;
+        lock (_sync)
+        {
+            writer = State == SoulBuddyNetworkState.Connected
+                ? _writer
+                : null;
+        }
+
+        if (writer is null)
         {
             return;
         }
@@ -110,17 +119,16 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         await _sendLock.WaitAsync(cancellationToken);
         try
         {
-            if (_writer is not null)
-            {
-                await _writer.WriteLineAsync(
-                    JsonSerializer.Serialize(envelope));
-            }
+            await writer.WriteLineAsync(JsonSerializer.Serialize(envelope));
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
         {
             SetStatus(
-                $"Synchronisierung fehlgeschlagen: {ex.Message}",
-                SoulBuddyNetworkState.Error);
+                "Verbindung zum Mitspieler verloren · neuer Verbindungsversuch läuft …",
+                Mode == SoulBuddyNetworkMode.Host
+                    ? SoulBuddyNetworkState.Waiting
+                    : SoulBuddyNetworkState.Connecting);
+            CloseActiveClient();
         }
         finally
         {
@@ -192,7 +200,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         }, cancellationToken);
     }
 
-    private async Task HostAsync(CancellationToken cancellationToken)
+    private async Task HostLoopAsync(CancellationToken cancellationToken)
     {
         _listener = new TcpListener(IPAddress.Any, DefaultTcpPort);
         _listener.Start();
@@ -203,42 +211,502 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             : string.Join(", ", addresses.Select(address =>
                 $"{address}:{DefaultTcpPort}"));
 
-        // LAN discovery must be available immediately. UPnP can take several
-        // seconds and must never delay local players from finding the host.
-        var discoveryTask = RunDiscoveryResponderAsync(cancellationToken);
-        SetStatus(
-            $"Host aktiv · Warte auf Mitspieler · Lokal: {localAddressText}",
-            SoulBuddyNetworkState.Waiting);
-
+        using var discoverySource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var discoveryTask = RunDiscoveryResponderAsync(discoverySource.Token);
         _ = TryPrepareInternetMappingAsync(localAddressText, cancellationToken);
 
         try
         {
-            _client = await _listener.AcceptTcpClientAsync(cancellationToken);
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                SetStatus(
+                    $"Host aktiv · Warte auf Mitspieler · Lokal: {localAddressText}",
+                    SoulBuddyNetworkState.Waiting);
+
+                TcpClient candidate;
+                try
+                {
+                    candidate = await _listener.AcceptTcpClientAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                SetStatus(
+                    "Mitspieler gefunden · Verbindung wird bestätigt …",
+                    SoulBuddyNetworkState.Connecting);
+
+                try
+                {
+                    var connection = await CompleteHandshakeAsync(
+                        candidate,
+                        isHost: true,
+                        cancellationToken);
+                    AdoptConnection(candidate, connection);
+                    await ReceiveMessagesAsync(connection.Reader, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    candidate.Dispose();
+                    break;
+                }
+                catch (Exception)
+                {
+                    candidate.Dispose();
+                    SetStatus(
+                        "Verbindungsversuch abgebrochen · Host wartet weiter …",
+                        SoulBuddyNetworkState.Waiting);
+                }
+                finally
+                {
+                    CloseActiveClient();
+                }
+            }
         }
         finally
         {
-            _listener.Stop();
-            _listener = null;
+            discoverySource.Cancel();
             CloseDiscoveryClient();
+            _listener?.Stop();
+            _listener = null;
+
+            try
+            {
+                await discoveryTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (SocketException)
+            {
+            }
         }
+    }
+
+    private async Task JoinLoopAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            SetStatus(
+                "Suche dauerhaft nach einem Host mit dieser Session-ID …",
+                SoulBuddyNetworkState.Connecting);
+
+            TcpClient? candidate = null;
+            try
+            {
+                candidate = string.IsNullOrWhiteSpace(JoinAddress)
+                    ? await ConnectDiscoveredHostAsync(cancellationToken)
+                    : await ConnectDirectOrDiscoveredHostAsync(cancellationToken);
+
+                SetStatus(
+                    "Host gefunden · Verbindung wird bestätigt …",
+                    SoulBuddyNetworkState.Connecting);
+
+                var connection = await CompleteHandshakeAsync(
+                    candidate,
+                    isHost: false,
+                    cancellationToken);
+                AdoptConnection(candidate, connection);
+                candidate = null;
+                await ReceiveMessagesAsync(connection.Reader, cancellationToken);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                candidate?.Dispose();
+                break;
+            }
+            catch (Exception)
+            {
+                candidate?.Dispose();
+                SetStatus(
+                    "Host noch nicht erreichbar · Suche läuft weiter …",
+                    SoulBuddyNetworkState.Connecting);
+            }
+            finally
+            {
+                CloseActiveClient();
+            }
+
+            await Task.Delay(RetryDelay, cancellationToken);
+        }
+    }
+
+    private async Task<TcpClient> ConnectDirectOrDiscoveredHostAsync(
+        CancellationToken cancellationToken)
+    {
+        using var raceSource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var localTask = ConnectDiscoveredHostAsync(raceSource.Token);
+        var directTask = ConnectDirectAsync(JoinAddress, raceSource.Token);
+        var candidates = new List<Task<TcpClient>> { localTask, directTask };
+
+        while (candidates.Count > 0)
+        {
+            var completed = await Task.WhenAny(candidates);
+            candidates.Remove(completed);
+            try
+            {
+                var client = await completed;
+                raceSource.Cancel();
+                return client;
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                // The other route may still succeed.
+            }
+        }
+
+        throw new InvalidOperationException("Kein Host erreichbar.");
+    }
+
+    private async Task<TcpClient> ConnectDiscoveredHostAsync(
+        CancellationToken cancellationToken)
+    {
+        var host = await DiscoverHostAsync(cancellationToken);
+        var client = new TcpClient();
+        try
+        {
+            using var timeoutSource =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutSource.CancelAfter(TimeSpan.FromSeconds(5));
+            await client.ConnectAsync(host.Address, host.Port, timeoutSource.Token);
+            return client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
+
+    private static async Task<TcpClient> ConnectDirectAsync(
+        string address,
+        CancellationToken cancellationToken)
+    {
+        var endpoint = ParseInternetAddress(address);
+        var client = new TcpClient();
+        try
+        {
+            using var timeoutSource =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutSource.CancelAfter(TimeSpan.FromSeconds(8));
+            await client.ConnectAsync(
+                endpoint.Host,
+                endpoint.Port,
+                timeoutSource.Token);
+            return client;
+        }
+        catch
+        {
+            client.Dispose();
+            throw;
+        }
+    }
+
+    private async Task<DiscoveredHost> DiscoverHostAsync(
+        CancellationToken cancellationToken)
+    {
+        using var udp = new UdpClient(0) { EnableBroadcast = true };
+        var request = new DiscoveryMessage
+        {
+            Type = "discover",
+            ProtocolVersion = ProtocolVersion,
+            SessionId = SessionId,
+            PlayerName = PlayerName
+        };
+        var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request);
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await udp.SendAsync(
+                requestBytes,
+                new IPEndPoint(IPAddress.Broadcast, DiscoveryPort),
+                cancellationToken);
+            await udp.SendAsync(
+                requestBytes,
+                new IPEndPoint(IPAddress.Loopback, DiscoveryPort),
+                cancellationToken);
+
+            using var receiveWindow =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            receiveWindow.CancelAfter(TimeSpan.FromMilliseconds(900));
+
+            try
+            {
+                while (!receiveWindow.IsCancellationRequested)
+                {
+                    var received = await udp.ReceiveAsync(receiveWindow.Token);
+                    DiscoveryMessage? response;
+                    try
+                    {
+                        response = JsonSerializer.Deserialize<DiscoveryMessage>(received.Buffer);
+                    }
+                    catch (JsonException)
+                    {
+                        continue;
+                    }
+
+                    if (response is null ||
+                        response.Type != "host" ||
+                        response.ProtocolVersion != ProtocolVersion ||
+                        response.TcpPort <= 0 ||
+                        !string.Equals(
+                            response.SessionId,
+                            SessionId,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    return new DiscoveredHost(
+                        received.RemoteEndPoint.Address,
+                        response.TcpPort);
+                }
+            }
+            catch (OperationCanceledException)
+                when (!cancellationToken.IsCancellationRequested)
+            {
+                // Send the discovery request again.
+            }
+        }
+
+        throw new OperationCanceledException(cancellationToken);
+    }
+
+    private async Task RunDiscoveryResponderAsync(
+        CancellationToken cancellationToken)
+    {
+        _discoveryClient = new UdpClient(
+            new IPEndPoint(IPAddress.Any, DiscoveryPort));
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            UdpReceiveResult received;
+            try
+            {
+                received = await _discoveryClient.ReceiveAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
+            catch (SocketException)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                continue;
+            }
+
+            DiscoveryMessage? request;
+            try
+            {
+                request = JsonSerializer.Deserialize<DiscoveryMessage>(received.Buffer);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            if (request is null ||
+                request.Type != "discover" ||
+                request.ProtocolVersion != ProtocolVersion ||
+                !string.Equals(
+                    request.SessionId,
+                    SessionId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var response = new DiscoveryMessage
+            {
+                Type = "host",
+                ProtocolVersion = ProtocolVersion,
+                SessionId = SessionId,
+                PlayerName = PlayerName,
+                TcpPort = DefaultTcpPort
+            };
+
+            try
+            {
+                await _discoveryClient.SendAsync(
+                    JsonSerializer.SerializeToUtf8Bytes(response),
+                    received.RemoteEndPoint,
+                    cancellationToken);
+            }
+            catch (Exception ex)
+                when (ex is ObjectDisposedException or SocketException)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    private async Task<PendingConnection> CompleteHandshakeAsync(
+        TcpClient client,
+        bool isHost,
+        CancellationToken cancellationToken)
+    {
+        client.NoDelay = true;
+        var stream = client.GetStream();
+        var reader = new StreamReader(
+            stream,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true,
+            bufferSize: 1024,
+            leaveOpen: true);
+        var writer = new StreamWriter(
+            stream,
+            new UTF8Encoding(false),
+            bufferSize: 1024,
+            leaveOpen: true)
+        {
+            AutoFlush = true
+        };
+
+        using var handshakeSource =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        handshakeSource.CancelAfter(TimeSpan.FromSeconds(8));
 
         try
         {
-            await discoveryTask;
+            var localHello = new NetworkHello
+            {
+                ProtocolVersion = ProtocolVersion,
+                SessionId = SessionId,
+                PlayerName = PlayerName
+            };
+
+            NetworkHello remoteHello;
+            if (isHost)
+            {
+                remoteHello = await ReadHelloAsync(reader, handshakeSource.Token);
+                await writer.WriteLineAsync(JsonSerializer.Serialize(localHello));
+            }
+            else
+            {
+                await writer.WriteLineAsync(JsonSerializer.Serialize(localHello));
+                remoteHello = await ReadHelloAsync(reader, handshakeSource.Token);
+            }
+
+            ValidateHello(remoteHello);
+            return new PendingConnection(reader, writer, remoteHello.PlayerName.Trim());
         }
-        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        catch
         {
+            reader.Dispose();
+            writer.Dispose();
+            throw;
         }
-        catch (ObjectDisposedException)
+    }
+
+    private void AdoptConnection(TcpClient client, PendingConnection connection)
+    {
+        lock (_sync)
         {
+            _client = client;
+            _reader = connection.Reader;
+            _writer = connection.Writer;
+            RemotePlayerName = connection.RemotePlayerName;
+            State = SoulBuddyNetworkState.Connected;
+            StatusText =
+                $"🟢 Verbunden mit {RemotePlayerName} · Session {SessionId}";
         }
-        catch (SocketException)
+        RaiseStatusChanged();
+    }
+
+    private void ValidateHello(NetworkHello remoteHello)
+    {
+        if (remoteHello.ProtocolVersion != ProtocolVersion)
         {
+            throw new InvalidOperationException(
+                "Der Mitspieler verwendet eine inkompatible Protokollversion.");
         }
 
-        await CompleteHandshakeAsync(_client, isHost: true, cancellationToken);
-        await ReceiveMessagesAsync(cancellationToken);
+        if (!string.Equals(
+                remoteHello.SessionId,
+                SessionId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Session-ID stimmt nicht überein: {remoteHello.SessionId}");
+        }
+
+        if (string.IsNullOrWhiteSpace(remoteHello.PlayerName))
+        {
+            throw new InvalidOperationException(
+                "Der Mitspieler hat keinen gültigen Spielernamen gesendet.");
+        }
+    }
+
+    private async Task ReceiveMessagesAsync(
+        StreamReader reader,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (line is null)
+            {
+                return;
+            }
+
+            NetworkEnvelope? envelope;
+            try
+            {
+                envelope = JsonSerializer.Deserialize<NetworkEnvelope>(line);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+
+            if (envelope?.Type == "player-snapshot" &&
+                envelope.PlayerSnapshot is not null)
+            {
+                LatestRemoteSnapshot = envelope.PlayerSnapshot;
+                RaisePlayerSnapshotReceived(envelope.PlayerSnapshot);
+            }
+        }
+    }
+
+    private static async Task<NetworkHello> ReadHelloAsync(
+        StreamReader reader,
+        CancellationToken cancellationToken)
+    {
+        var line = await reader.ReadLineAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            throw new InvalidOperationException(
+                "Der Mitspieler hat keine Verbindungsdaten gesendet.");
+        }
+
+        return JsonSerializer.Deserialize<NetworkHello>(line) ??
+               throw new InvalidOperationException(
+                   "Die Verbindungsdaten des Mitspielers sind ungültig.");
     }
 
     private async Task TryPrepareInternetMappingAsync(
@@ -272,155 +740,6 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         }
     }
 
-    private async Task RunDiscoveryResponderAsync(
-        CancellationToken cancellationToken)
-    {
-        _discoveryClient = new UdpClient(
-            new IPEndPoint(IPAddress.Any, DiscoveryPort));
-
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            UdpReceiveResult received;
-            try
-            {
-                received = await _discoveryClient.ReceiveAsync(cancellationToken);
-            }
-            catch (ObjectDisposedException)
-            {
-                break;
-            }
-            catch (SocketException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-
-            DiscoveryMessage? request;
-            try
-            {
-                request = JsonSerializer.Deserialize<DiscoveryMessage>(received.Buffer);
-            }
-            catch (JsonException)
-            {
-                continue;
-            }
-
-            if (request is null ||
-                request.Type != "discover" ||
-                request.ProtocolVersion != ProtocolVersion ||
-                !string.Equals(request.SessionId, SessionId, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var response = new DiscoveryMessage
-            {
-                Type = "host",
-                ProtocolVersion = ProtocolVersion,
-                SessionId = SessionId,
-                PlayerName = PlayerName,
-                TcpPort = DefaultTcpPort
-            };
-
-            await _discoveryClient.SendAsync(
-                JsonSerializer.SerializeToUtf8Bytes(response),
-                received.RemoteEndPoint,
-                cancellationToken);
-        }
-    }
-
-    private async Task DiscoverAndJoinAsync(CancellationToken cancellationToken)
-    {
-        SetStatus(
-            string.IsNullOrWhiteSpace(JoinAddress)
-                ? "Suche Host für diese Session automatisch im lokalen Netzwerk …"
-                : "Suche lokal und versuche gleichzeitig die angegebene Internet-Adresse …",
-            SoulBuddyNetworkState.Connecting);
-
-        using var raceSource =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var candidates = new List<Task<TcpClient?>>
-        {
-            ConnectDiscoveredHostAsync(raceSource.Token)
-        };
-
-        if (!string.IsNullOrWhiteSpace(JoinAddress))
-        {
-            candidates.Add(ConnectDirectAsync(JoinAddress, raceSource.Token));
-        }
-
-        TcpClient? winner = null;
-        var failures = new List<Exception>();
-
-        while (candidates.Count > 0 && winner is null)
-        {
-            var completed = await Task.WhenAny(candidates);
-            candidates.Remove(completed);
-            try
-            {
-                winner = await completed;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                failures.Add(ex);
-            }
-        }
-
-        if (winner is null)
-        {
-            var detail = failures.LastOrDefault()?.Message;
-            throw new InvalidOperationException(
-                string.IsNullOrWhiteSpace(detail)
-                    ? "Kein Host gefunden. Prüfe die Session-ID."
-                    : $"Kein Host gefunden: {detail}");
-        }
-
-        raceSource.Cancel();
-        _client = winner;
-        await CompleteHandshakeAsync(_client, isHost: false, cancellationToken);
-        await ReceiveMessagesAsync(cancellationToken);
-    }
-
-    private async Task<TcpClient?> ConnectDiscoveredHostAsync(
-        CancellationToken cancellationToken)
-    {
-        var host = await DiscoverHostAsync(cancellationToken);
-        var client = new TcpClient();
-        try
-        {
-            await client.ConnectAsync(host.Address, host.Port, cancellationToken);
-            return client;
-        }
-        catch
-        {
-            client.Dispose();
-            throw;
-        }
-    }
-
-    private static async Task<TcpClient?> ConnectDirectAsync(
-        string address,
-        CancellationToken cancellationToken)
-    {
-        var endpoint = ParseInternetAddress(address);
-        var client = new TcpClient();
-        try
-        {
-            using var timeoutSource =
-                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutSource.CancelAfter(TimeSpan.FromSeconds(15));
-            await client.ConnectAsync(
-                endpoint.Host,
-                endpoint.Port,
-                timeoutSource.Token);
-            return client;
-        }
-        catch
-        {
-            client.Dispose();
-            throw;
-        }
-    }
-
     private static InternetEndpoint ParseInternetAddress(string value)
     {
         var trimmed = value.Trim();
@@ -437,210 +756,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
                 uri.IsDefaultPort ? DefaultTcpPort : uri.Port);
         }
 
-        throw new InvalidOperationException(
-            "Die Internet-Adresse ist ungültig.");
-    }
-
-    private async Task<DiscoveredHost> DiscoverHostAsync(
-        CancellationToken cancellationToken)
-    {
-        using var udp = new UdpClient(0) { EnableBroadcast = true };
-        var request = new DiscoveryMessage
-        {
-            Type = "discover",
-            ProtocolVersion = ProtocolVersion,
-            SessionId = SessionId,
-            PlayerName = PlayerName
-        };
-        var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request);
-
-        using var overallTimeout =
-            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        overallTimeout.CancelAfter(TimeSpan.FromSeconds(20));
-
-        while (!overallTimeout.IsCancellationRequested)
-        {
-            await udp.SendAsync(
-                requestBytes,
-                new IPEndPoint(IPAddress.Broadcast, DiscoveryPort),
-                overallTimeout.Token);
-            await udp.SendAsync(
-                requestBytes,
-                new IPEndPoint(IPAddress.Loopback, DiscoveryPort),
-                overallTimeout.Token);
-
-            using var receiveWindow =
-                CancellationTokenSource.CreateLinkedTokenSource(overallTimeout.Token);
-            receiveWindow.CancelAfter(TimeSpan.FromMilliseconds(900));
-
-            try
-            {
-                while (true)
-                {
-                    var received = await udp.ReceiveAsync(receiveWindow.Token);
-                    DiscoveryMessage? response;
-                    try
-                    {
-                        response = JsonSerializer.Deserialize<DiscoveryMessage>(received.Buffer);
-                    }
-                    catch (JsonException)
-                    {
-                        continue;
-                    }
-
-                    if (response is null ||
-                        response.Type != "host" ||
-                        response.ProtocolVersion != ProtocolVersion ||
-                        response.TcpPort <= 0 ||
-                        !string.Equals(response.SessionId, SessionId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    return new DiscoveredHost(
-                        received.RemoteEndPoint.Address,
-                        response.TcpPort);
-                }
-            }
-            catch (OperationCanceledException)
-                when (!cancellationToken.IsCancellationRequested &&
-                      !overallTimeout.IsCancellationRequested)
-            {
-                // No answer in this short window. Broadcast again.
-            }
-        }
-
-        throw new InvalidOperationException(
-            "Im lokalen Netzwerk wurde kein passender Host gefunden.");
-    }
-
-    private async Task CompleteHandshakeAsync(
-        TcpClient client,
-        bool isHost,
-        CancellationToken cancellationToken)
-    {
-        var stream = client.GetStream();
-        _reader = new StreamReader(
-            stream,
-            Encoding.UTF8,
-            detectEncodingFromByteOrderMarks: true,
-            bufferSize: 1024,
-            leaveOpen: true);
-        _writer = new StreamWriter(
-            stream,
-            new UTF8Encoding(false),
-            bufferSize: 1024,
-            leaveOpen: true)
-        {
-            AutoFlush = true
-        };
-
-        var localHello = new NetworkHello
-        {
-            ProtocolVersion = ProtocolVersion,
-            SessionId = SessionId,
-            PlayerName = PlayerName
-        };
-
-        NetworkHello remoteHello;
-        if (isHost)
-        {
-            remoteHello = await ReadHelloAsync(_reader, cancellationToken);
-            await _writer.WriteLineAsync(JsonSerializer.Serialize(localHello));
-        }
-        else
-        {
-            await _writer.WriteLineAsync(JsonSerializer.Serialize(localHello));
-            remoteHello = await ReadHelloAsync(_reader, cancellationToken);
-        }
-
-        if (remoteHello.ProtocolVersion != ProtocolVersion)
-        {
-            throw new InvalidOperationException(
-                "Der Mitspieler verwendet eine inkompatible Protokollversion.");
-        }
-
-        if (!string.Equals(
-                remoteHello.SessionId,
-                SessionId,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException(
-                $"Session-ID stimmt nicht überein: {remoteHello.SessionId}");
-        }
-
-        if (string.IsNullOrWhiteSpace(remoteHello.PlayerName))
-        {
-            throw new InvalidOperationException(
-                "Der Mitspieler hat keinen gültigen Spielernamen gesendet.");
-        }
-
-        RemotePlayerName = remoteHello.PlayerName.Trim();
-        SetStatus(
-            $"🟢 Verbunden mit {RemotePlayerName} · Session {SessionId}",
-            SoulBuddyNetworkState.Connected);
-    }
-
-    private async Task ReceiveMessagesAsync(CancellationToken cancellationToken)
-    {
-        if (_reader is null)
-        {
-            return;
-        }
-
-        try
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                var line = await _reader.ReadLineAsync(cancellationToken);
-                if (line is null)
-                {
-                    break;
-                }
-
-                NetworkEnvelope? envelope;
-                try
-                {
-                    envelope = JsonSerializer.Deserialize<NetworkEnvelope>(line);
-                }
-                catch (JsonException)
-                {
-                    continue;
-                }
-
-                if (envelope?.Type == "player-snapshot" &&
-                    envelope.PlayerSnapshot is not null)
-                {
-                    LatestRemoteSnapshot = envelope.PlayerSnapshot;
-                    RaisePlayerSnapshotReceived(envelope.PlayerSnapshot);
-                }
-            }
-        }
-        finally
-        {
-            if (!cancellationToken.IsCancellationRequested)
-            {
-                SetStatus(
-                    "Mitspieler hat die Verbindung getrennt.",
-                    SoulBuddyNetworkState.Idle);
-            }
-        }
-    }
-
-    private static async Task<NetworkHello> ReadHelloAsync(
-        StreamReader reader,
-        CancellationToken cancellationToken)
-    {
-        var line = await reader.ReadLineAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(line))
-        {
-            throw new InvalidOperationException(
-                "Der Mitspieler hat keine Verbindungsdaten gesendet.");
-        }
-
-        return JsonSerializer.Deserialize<NetworkHello>(line) ??
-               throw new InvalidOperationException(
-                   "Die Verbindungsdaten des Mitspielers sind ungültig.");
+        throw new InvalidOperationException("Die Internet-Adresse ist ungültig.");
     }
 
     private static IReadOnlyList<string> GetLocalIpv4Addresses()
@@ -702,9 +818,38 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
 
     private void CloseDiscoveryClient()
     {
-        _discoveryClient?.Close();
-        _discoveryClient?.Dispose();
+        try
+        {
+            _discoveryClient?.Close();
+            _discoveryClient?.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
         _discoveryClient = null;
+    }
+
+    private void CloseActiveClient()
+    {
+        lock (_sync)
+        {
+            try
+            {
+                _reader?.Dispose();
+                _writer?.Dispose();
+                _client?.Close();
+                _client?.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            _reader = null;
+            _writer = null;
+            _client = null;
+            RemotePlayerName = string.Empty;
+            LatestRemoteSnapshot = null;
+        }
     }
 
     private void StopCurrentConnection()
@@ -720,13 +865,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         CloseDiscoveryClient();
         _listener?.Stop();
         _listener = null;
-        _reader?.Dispose();
-        _reader = null;
-        _writer?.Dispose();
-        _writer = null;
-        _client?.Close();
-        _client?.Dispose();
-        _client = null;
+        CloseActiveClient();
         _cancellationSource?.Dispose();
         _cancellationSource = null;
         _networkTask = null;
@@ -758,12 +897,16 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             catch (OperationCanceledException)
             {
             }
+            catch (ObjectDisposedException)
+            {
+            }
         }
 
         if (ReferenceEquals(Current, this))
         {
             Current = null;
         }
+
         _sendLock.Dispose();
         _portMapper.Dispose();
     }
@@ -789,6 +932,11 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         public string Type { get; init; } = string.Empty;
         public NetworkPlayerSnapshot? PlayerSnapshot { get; init; }
     }
+
+    private sealed record PendingConnection(
+        StreamReader Reader,
+        StreamWriter Writer,
+        string RemotePlayerName);
 
     private sealed record DiscoveredHost(IPAddress Address, int Port);
     private sealed record InternetEndpoint(string Host, int Port);
