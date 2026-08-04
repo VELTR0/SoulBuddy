@@ -431,7 +431,7 @@ public sealed class MainWindow : Window
         ownLayout.Children.Add(text);
 
         Control content = ownLayout;
-        if (party)
+        if (party && _networkService.State == SoulBuddyNetworkState.Connected)
         {
             var completeLayout = new Grid
             {
