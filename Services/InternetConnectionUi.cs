@@ -79,87 +79,24 @@ internal static class InternetConnectionUi
             return false;
         }
 
-        ArrangePartnerNetworkArea(partnerStack, buttonGrid);
+        RemoveManualNetworkControls(partnerStack, buttonGrid);
         MoveAllStatusCardsIntoHeader(window, partnerStack);
         return true;
     }
 
-    private static void ArrangePartnerNetworkArea(
+    private static void RemoveManualNetworkControls(
         StackPanel partnerStack,
         Grid buttonGrid)
     {
-        var statusControls = partnerStack.Children
-            .Where(child => !ReferenceEquals(child, buttonGrid))
-            .ToArray();
-
-        foreach (var child in statusControls)
-        {
-            partnerStack.Children.Remove(child);
-        }
         partnerStack.Children.Remove(buttonGrid);
 
-        var statusPanel = new StackPanel
+        foreach (var button in buttonGrid.Children.OfType<Button>())
         {
-            Spacing = 4,
-            VerticalAlignment = VerticalAlignment.Top,
-            MinWidth = 0
-        };
-        foreach (var child in statusControls)
-        {
-            statusPanel.Children.Add(child);
+            button.IsEnabled = false;
+            button.IsVisible = false;
         }
 
-        var label = new TextBlock
-        {
-            Text = "INTERNET-ADRESSE DES HOSTS (OPTIONAL)",
-            FontSize = 8,
-            FontWeight = FontWeight.Bold,
-            Foreground = Brush("#93C5FD")
-        };
-        var addressBox = new TextBox
-        {
-            PlaceholderText = "z. B. 84.123.45.67:45831",
-            FontSize = 10,
-            MinHeight = 28,
-            Padding = new Thickness(7, 4),
-            Background = Brush("#0F1829"),
-            Foreground = Brush("#F8FAFC"),
-            BorderBrush = Brush("#334E8A"),
-            BorderThickness = new Thickness(1),
-            HorizontalAlignment = HorizontalAlignment.Stretch
-        };
-        addressBox.TextChanged += (_, _) =>
-        {
-            if (SoulBuddyNetworkService.Current is { } service)
-            {
-                service.JoinAddress = addressBox.Text?.Trim() ?? string.Empty;
-            }
-        };
-
-        var controlsPanel = new StackPanel
-        {
-            Spacing = 5,
-            VerticalAlignment = VerticalAlignment.Top,
-            MinWidth = 0
-        };
-        controlsPanel.Children.Add(label);
-        controlsPanel.Children.Add(addressBox);
-        controlsPanel.Children.Add(buttonGrid);
-
-        var separator = VerticalSeparator();
-        var layout = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("1*,Auto,1.35*"),
-            ColumnSpacing = 10,
-            MinWidth = 0
-        };
-        layout.Children.Add(statusPanel);
-        Grid.SetColumn(separator, 1);
-        layout.Children.Add(separator);
-        Grid.SetColumn(controlsPanel, 2);
-        layout.Children.Add(controlsPanel);
-
-        partnerStack.Children.Add(layout);
+        partnerStack.Spacing = 4;
     }
 
     private static void MoveAllStatusCardsIntoHeader(
@@ -214,12 +151,10 @@ internal static class InternetConnectionUi
             return;
         }
 
-        // Detach the contents before reusing them in the combined header card.
         sessionCard.Child = null;
         localCard.Child = null;
         partnerCard.Child = null;
 
-        // Remove the old cards from their original parent before reparenting.
         sessionGrid.Children.Remove(sessionCard);
         sessionGrid.Children.Remove(localCard);
         sessionGrid.Children.Remove(partnerCard);
@@ -228,7 +163,7 @@ internal static class InternetConnectionUi
         var playerSeparator = VerticalSeparator();
         var statusLayout = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("0.7*,Auto,0.95*,Auto,2.15*"),
+            ColumnDefinitions = new ColumnDefinitions("0.7*,Auto,0.95*,Auto,1.35*"),
             ColumnSpacing = 12,
             MinWidth = 0
         };
