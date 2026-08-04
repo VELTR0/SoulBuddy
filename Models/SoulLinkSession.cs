@@ -1,24 +1,12 @@
-using System.Text.Json.Serialization;
-
 namespace SoulBuddy.Models;
 
 public enum SessionLaunchMode
 {
-    Host,
-    Join,
-    Continue
+    Auto
 }
 
 public sealed class SoulLinkSession
 {
-    public required string Id { get; init; }
-
-    // Compatibility alias for older UI code and previously stored sessions.
-    // A session no longer has a separately configurable name; its ID is the
-    // only identifier.
-    [JsonIgnore]
-    public string Name => Id;
-
     public DateTimeOffset CreatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
 
     public DateTimeOffset UpdatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
@@ -39,11 +27,7 @@ public sealed class SessionPlayer
 
 public sealed class ActiveSession
 {
-    public required string SessionId { get; init; }
-
     public required string PlayerId { get; init; }
-
-    public SessionLaunchMode LaunchMode { get; init; } = SessionLaunchMode.Continue;
 }
 
 public sealed class SessionContext
@@ -52,5 +36,5 @@ public sealed class SessionContext
 
     public required SessionPlayer LocalPlayer { get; init; }
 
-    public SessionLaunchMode LaunchMode { get; init; } = SessionLaunchMode.Continue;
+    public SessionLaunchMode LaunchMode { get; init; } = SessionLaunchMode.Auto;
 }
