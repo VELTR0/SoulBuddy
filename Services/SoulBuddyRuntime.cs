@@ -122,7 +122,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             livePartySource,
             playerLiveStateSource);
 
-        return new SoulBuddyRuntime(
+        var runtime = new SoulBuddyRuntime(
             config,
             configDirectory,
             partyJsonPath,
@@ -134,6 +134,13 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             knownPokemonStore,
             syncService,
             collectorEventSource);
+
+        // Complete the initial Soullocke -> SoulBuddy pull before this runtime
+        // is returned to the UI. Consequently neither the collector loop nor
+        // the SoulBuddy -> Soullocke upload loop can race the initial import.
+        await runtime.SyncService.InitializeAsync(cancellationToken);
+
+        return runtime;
     }
 
     private static string FindConfigDirectory()
