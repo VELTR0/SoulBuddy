@@ -62,7 +62,11 @@ public sealed class SessionStore
         };
 
         await SaveSessionAsync(session, cancellationToken);
-        await SaveActiveSessionAsync(session.Id, localPlayer.Id, cancellationToken);
+        await SaveActiveSessionAsync(
+            session.Id,
+            localPlayer.Id,
+            SessionLaunchMode.Host,
+            cancellationToken);
 
         return new SessionContext
         {
@@ -108,7 +112,11 @@ public sealed class SessionStore
             await SaveSessionAsync(session, cancellationToken);
         }
 
-        await SaveActiveSessionAsync(session.Id, localPlayer.Id, cancellationToken);
+        await SaveActiveSessionAsync(
+            session.Id,
+            localPlayer.Id,
+            SessionLaunchMode.Join,
+            cancellationToken);
 
         return new SessionContext
         {
@@ -149,7 +157,7 @@ public sealed class SessionStore
         {
             Session = session,
             LocalPlayer = player,
-            LaunchMode = SessionLaunchMode.Continue
+            LaunchMode = active.LaunchMode
         };
     }
 
@@ -183,12 +191,14 @@ public sealed class SessionStore
     private async Task SaveActiveSessionAsync(
         string sessionId,
         string playerId,
+        SessionLaunchMode launchMode,
         CancellationToken cancellationToken)
     {
         var active = new ActiveSession
         {
             SessionId = sessionId,
-            PlayerId = playerId
+            PlayerId = playerId,
+            LaunchMode = launchMode
         };
         var json = JsonSerializer.Serialize(active, JsonOptions);
         await WriteAtomicallyAsync(_activeSessionPath, json, cancellationToken);
