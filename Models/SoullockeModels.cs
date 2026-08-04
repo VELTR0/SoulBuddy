@@ -2,6 +2,42 @@ using System.Text.Json.Serialization;
 
 namespace SoulBuddy.Models;
 
+public sealed class SoullockeSessionResponse
+{
+    [JsonPropertyName("id")]
+    public string Id { get; init; } = string.Empty;
+
+    [JsonPropertyName("settings")]
+    public SoullockeSessionSettings Settings { get; init; } = new();
+}
+
+public sealed class SoullockeSessionSettings
+{
+    [JsonPropertyName("teams")]
+    public List<SoullockeTeam> Teams { get; init; } = [];
+
+    [JsonPropertyName("game")]
+    public string Game { get; init; } = string.Empty;
+}
+
+public sealed class SoullockeTeam
+{
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = string.Empty;
+
+    [JsonPropertyName("players")]
+    public List<string> Players { get; init; } = [];
+}
+
+public sealed class SoullockePasswordValidationResponse
+{
+    [JsonPropertyName("isValid")]
+    public bool IsValid { get; init; }
+
+    [JsonPropertyName("authToken")]
+    public string AuthToken { get; init; } = string.Empty;
+}
+
 public sealed class BatchLoadResponse
 {
     [JsonPropertyName("playerData")]
