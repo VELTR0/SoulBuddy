@@ -17,12 +17,27 @@ public sealed class PokemonCardViewModel
     public string Pokeball { get; init; } = string.Empty;
     public bool IsShiny { get; init; }
 
+    // SoulLink data is calculated in MainWindowViewModel before the card is
+    // rendered. The UI therefore does not need to search or modify its own
+    // visual tree after creation.
+    public bool IsSoulLinked { get; init; }
+    public string LinkedDisplayName { get; init; } = string.Empty;
+    public string LinkedSpecies { get; init; } = string.Empty;
+    public int LinkedSpeciesId { get; init; }
+    public int LinkedCurrentHp { get; init; } = -1;
+    public bool LinkedIsFainted => IsSoulLinked &&
+                                   (CurrentHp == 0 || LinkedCurrentHp == 0);
+
     public string NameLine => string.Equals(
         DisplayName,
         Species,
         StringComparison.OrdinalIgnoreCase)
         ? DisplayName
         : $"{DisplayName} · {Species}";
+
+    public string LinkedNameLine => string.IsNullOrWhiteSpace(LinkedDisplayName)
+        ? LinkedSpecies
+        : LinkedDisplayName;
 
     public string LevelText => $"Level {Level}";
 
