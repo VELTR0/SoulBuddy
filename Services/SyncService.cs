@@ -12,6 +12,8 @@ public sealed class SyncService
     private readonly KnownPokemonStore _knownPokemon;
     private readonly LocationMapper _locationMapper;
     private readonly HashSet<string> _dryRunProcessedPokemonIds = [];
+    private readonly SemaphoreSlim _initializationLock = new(1, 1);
+    private bool _initialized;
 
     public SyncService(
         IPartySource partySource,
@@ -27,14 +29,46 @@ public sealed class SyncService
         _config = config;
     }
 
+    /// <summary>
+    /// Initializes the local SoulBuddy state. In Soullocke mode this method
+    /// completes the full Soullocke-to-SoulBuddy import before the live
+    /// SoulBuddy-to-Soullocke synchronization is allowed to start.
+    /// </summary>
+    public async Task InitializeAsync(CancellationToken cancellationToken)
+    {
+        if (_initialized)
+        {
+            return;
+        }
+
+        await _initializationLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_initialized)
+            {
+                return;
+            }
+
+            await _knownPokemon.LoadAsync(cancellationToken);
+
+            if (_config.SoullockeEnabled)
+            {
+                Console.WriteLine("Soullocke-Startimport läuft …");
+                await ImportSoullockeRunAsync(cancellationToken);
+                Console.WriteLine("Soullocke-Startimport abgeschlossen. Upload-Synchronisierung wird freigegeben.");
+            }
+
+            _initialized = true;
+        }
+        finally
+        {
+            _initializationLock.Release();
+        }
+    }
+
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        await _knownPokemon.LoadAsync(cancellationToken);
-
-        if (_config.SoullockeEnabled)
-        {
-            await ImportSoullockeRunAsync(cancellationToken);
-        }
+        await InitializeAsync(cancellationToken);
 
         var locallyStoredPokemon =
             await _knownPokemon.GetAllAsync(cancellationToken);
@@ -83,6 +117,8 @@ public sealed class SyncService
         CancellationToken cancellationToken)
     {
         var run = await _soullockeClient.LoadRunAsync(cancellationToken);
+        var importedCount = 0;
+        var refreshedCount = 0;
 
         foreach (var pair in run.Encounters)
         {
@@ -94,6 +130,13 @@ public sealed class SyncService
             }
 
             var uniqueId = $"soullocke:{_config.PlayerId}:{location}";
+            var currentHp = string.Equals(
+                encounter.Status,
+                "fainted",
+                StringComparison.OrdinalIgnoreCase)
+                    ? 0
+                    : 1;
+
             if (!_knownPokemon.Contains(uniqueId))
             {
                 await _knownPokemon.AddAsync(
@@ -105,15 +148,23 @@ public sealed class SyncService
                         Species = $"Pokémon #{encounter.Pokemon}",
                         Nickname = encounter.Nickname,
                         Location = location,
-                        CurrentHp = string.Equals(
-                            encounter.Status,
-                            "fainted",
-                            StringComparison.OrdinalIgnoreCase)
-                                ? 0
-                                : 1,
+                        CurrentHp = currentHp,
                         MaxHp = 1
                     },
                     cancellationToken);
+                importedCount++;
+            }
+            else
+            {
+                // Soullocke is authoritative during initialization. Refresh
+                // the status of entries that were imported on an earlier run.
+                await _knownPokemon.UpdateCurrentStateAsync(
+                    uniqueId,
+                    currentLevel: 0,
+                    currentHp,
+                    maxHp: 1,
+                    cancellationToken);
+                refreshedCount++;
             }
 
             await _knownPokemon.MarkSoullockeSyncedAsync(
@@ -122,12 +173,19 @@ public sealed class SyncService
         }
 
         Console.WriteLine(
-            $"Soullocke-Initialisierung: {run.Encounters.Count} Begegnungen gelesen.");
+            $"Soullocke-Initialisierung: {run.Encounters.Count} Begegnungen gelesen, " +
+            $"{importedCount} neu importiert, {refreshedCount} aktualisiert.");
     }
 
     private async Task SynchronizeOnceAsync(
         CancellationToken cancellationToken)
     {
+        if (!_initialized)
+        {
+            throw new InvalidOperationException(
+                "Der Soullocke-Startimport wurde noch nicht abgeschlossen.");
+        }
+
         var pokemonSlots =
             await _partySource.ReadAllPokemonAsync(cancellationToken);
 
