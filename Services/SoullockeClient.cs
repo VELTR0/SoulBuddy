@@ -182,19 +182,30 @@ public sealed class SoullockeClient
                 "In der Soullocke-Sitzung wurden keine Spieler gefunden.");
         }
 
-        var local = entries.FirstOrDefault(entry => string.Equals(
-            entry.PlayerName.Trim(),
-            _config.PlayerName.Trim(),
-            StringComparison.OrdinalIgnoreCase));
+        var requestedName = _config.PlayerName.Trim();
+        var matches = entries
+            .Where(entry => string.Equals(
+                entry.PlayerName.Trim(),
+                requestedName,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
 
-        if (string.IsNullOrWhiteSpace(local.PlayerId))
+        if (matches.Length == 0)
         {
             var availableNames = string.Join(", ", entries.Select(entry => entry.PlayerName));
             throw new InvalidOperationException(
-                $"Der Spielername „{_config.PlayerName}“ wurde in Soullocke nicht gefunden. " +
+                $"Der SoulBuddy-Spielername „{_config.PlayerName}“ wurde in Soullocke nicht gefunden. " +
                 $"Verfügbare Namen: {availableNames}");
         }
 
+        if (matches.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Der Spielername „{_config.PlayerName}“ kommt in der Soullocke-Sitzung mehrfach vor. " +
+                "Bitte verwende dort eindeutige Spielernamen.");
+        }
+
+        var local = matches[0];
         _config.PlayerId = local.PlayerId;
         _config.TeamName = local.TeamName;
         _config.PlayerName = local.PlayerName;
