@@ -1,22 +1,22 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Avalonia;
-using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
-using Avalonia.VisualTree;
 using SoulBuddy.Models;
 using SoulBuddy.Views;
 
 namespace SoulBuddy.Services;
 
 /// <summary>
-/// Starts the network mode selected on the session screen automatically.
-/// Creating a session hosts, joining a session searches for that host, and
-/// continuing first searches before falling back to hosting locally.
+/// Starts SoulBuddy networking automatically. Every client first searches the
+/// local network. If no peer is available, one client takes over hosting after
+/// a short randomized delay while the other keeps searching.
 /// </summary>
 internal static class AutomaticSessionNetworking
 {
+    private const string LanDiscoveryChannel = "soulbuddy-lan";
+
     private static readonly FieldInfo? ContextField = typeof(MainWindow).GetField(
         "_sessionContext",
         BindingFlags.Instance | BindingFlags.NonPublic);
@@ -53,9 +53,6 @@ internal static class AutomaticSessionNetworking
 
         foreach (var window in desktop.Windows.OfType<MainWindow>())
         {
-            HideManualNetworkButtons(window);
-            RemoveLegacySessionNameUi(window);
-
             if (!StartedWindows.Add(window))
             {
                 continue;
@@ -66,38 +63,8 @@ internal static class AutomaticSessionNetworking
         }
     }
 
-    private static void RemoveLegacySessionNameUi(MainWindow window)
-    {
-        if (ContextField?.GetValue(window) is not SessionContext context)
-        {
-            return;
-        }
-
-        window.Title = $"SoulBuddy · {context.LocalPlayer.DisplayName}";
-
-        // MainWindow historically rendered Session.Name above the ID. Since a
-        // session is now identified exclusively by its ID, hide that redundant
-        // legacy text line while keeping the explicit "ID: ..." line visible.
-        var redundantTitle = window
-            .GetVisualDescendants()
-            .OfType<TextBlock>()
-            .FirstOrDefault(text => string.Equals(
-                text.Text,
-                context.Session.Id,
-                StringComparison.OrdinalIgnoreCase));
-
-        if (redundantTitle is not null)
-        {
-            redundantTitle.IsVisible = false;
-            redundantTitle.Height = 0;
-            redundantTitle.Margin = new Thickness(0);
-        }
-    }
-
     private static async Task StartForWindowAsync(MainWindow window)
     {
-        // Give the visual tree and the optional internet-address field time to
-        // finish their setup before networking starts.
         await Task.Delay(350);
 
         if (ContextField?.GetValue(window) is not SessionContext context ||
@@ -106,96 +73,39 @@ internal static class AutomaticSessionNetworking
             return;
         }
 
-        var sessionId = context.Session.Id;
         var playerName = context.LocalPlayer.DisplayName;
 
         try
         {
-            switch (context.LaunchMode)
+            network.PrepareJoin(LanDiscoveryChannel, playerName, network.JoinAddress);
+
+            var searchDuration = TimeSpan.FromMilliseconds(
+                1800 + Random.Shared.Next(0, 2200));
+            var searchUntil = DateTimeOffset.UtcNow + searchDuration;
+
+            while (DateTimeOffset.UtcNow < searchUntil)
             {
-                case SessionLaunchMode.Host:
-                    network.PrepareHost(sessionId, playerName);
-                    break;
+                await Task.Delay(200);
+                if (network.State == SoulBuddyNetworkState.Connected)
+                {
+                    return;
+                }
+            }
 
-                case SessionLaunchMode.Join:
-                    network.PrepareJoin(sessionId, playerName, network.JoinAddress);
-                    break;
-
-                case SessionLaunchMode.Continue:
-                    await ContinueAutomaticallyAsync(
-                        network,
-                        sessionId,
-                        playerName,
-                        window);
-                    break;
+            if (network.State != SoulBuddyNetworkState.Connected)
+            {
+                network.PrepareHost(LanDiscoveryChannel, playerName);
             }
         }
-        catch (Exception ex)
+        catch
         {
-            SetNetworkStatus(window, $"Automatischer Netzwerkstart fehlgeschlagen: {ex.Message}");
-        }
-    }
-
-    private static async Task ContinueAutomaticallyAsync(
-        SoulBuddyNetworkService network,
-        string sessionId,
-        string playerName,
-        Window window)
-    {
-        network.PrepareJoin(sessionId, playerName, network.JoinAddress);
-        SetNetworkStatus(window, "Suche automatisch nach einem bestehenden Host …");
-
-        // A continued session does not know whether this client was the host.
-        // Search first; if nobody is reachable, this client becomes the host.
-        for (var attempt = 0; attempt < 24; attempt++)
-        {
-            await Task.Delay(250);
-
-            if (network.State == SoulBuddyNetworkState.Connected)
+            // If another client won the host race, resume discovery instead of
+            // surfacing a transient port-conflict to the user.
+            await Task.Delay(Random.Shared.Next(350, 900));
+            if (network.State != SoulBuddyNetworkState.Connected)
             {
-                return;
+                network.PrepareJoin(LanDiscoveryChannel, playerName, network.JoinAddress);
             }
-        }
-
-        if (network.State != SoulBuddyNetworkState.Connected)
-        {
-            SetNetworkStatus(window, "Kein Host gefunden · SoulBuddy übernimmt das Hosting …");
-            network.PrepareHost(sessionId, playerName);
-        }
-    }
-
-    private static void HideManualNetworkButtons(MainWindow window)
-    {
-        foreach (var button in window.GetVisualDescendants().OfType<Button>())
-        {
-            if (button.Content is string label &&
-                (string.Equals(label, "Host", StringComparison.Ordinal) ||
-                 string.Equals(label, "Beitreten", StringComparison.Ordinal)))
-            {
-                button.IsVisible = false;
-                button.IsEnabled = false;
-                button.Width = 0;
-                button.Height = 0;
-                button.Margin = new Thickness(0);
-                button.Padding = new Thickness(0);
-            }
-        }
-    }
-
-    private static void SetNetworkStatus(Window window, string message)
-    {
-        var status = window
-            .GetVisualDescendants()
-            .OfType<TextBlock>()
-            .FirstOrDefault(text =>
-                text.Text is not null &&
-                (text.Text.Contains("Netzwerk", StringComparison.OrdinalIgnoreCase) ||
-                 text.Text.Contains("Host", StringComparison.OrdinalIgnoreCase) ||
-                 text.Text.Contains("Session", StringComparison.OrdinalIgnoreCase)));
-
-        if (status is not null)
-        {
-            status.Text = message;
         }
     }
 }
