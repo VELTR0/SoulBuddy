@@ -9,8 +9,6 @@ public enum SessionLaunchMode
 
 public sealed class SoulLinkSession
 {
-    // Compatibility-only accessors for older UI code. They carry no identity,
-    // are never persisted and are removed from the visible interface.
     [JsonIgnore]
     public string Id => string.Empty;
 
@@ -38,6 +36,12 @@ public sealed class SessionPlayer
 public sealed class ActiveSession
 {
     public required string PlayerId { get; init; }
+
+    public bool SoullockeEnabled { get; init; }
+
+    public string SoullockeLink { get; init; } = string.Empty;
+
+    public string SoullockePassword { get; init; } = string.Empty;
 }
 
 public sealed class SessionContext
@@ -47,4 +51,10 @@ public sealed class SessionContext
     public required SessionPlayer LocalPlayer { get; init; }
 
     public SessionLaunchMode LaunchMode { get; init; } = SessionLaunchMode.Auto;
+
+    public bool SoullockeEnabled { get; init; }
+
+    public string SoullockeLink { get; init; } = string.Empty;
+
+    public string SoullockePassword { get; init; } = string.Empty;
 }
