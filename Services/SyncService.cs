@@ -31,6 +31,11 @@ public sealed class SyncService
     {
         await _knownPokemon.LoadAsync(cancellationToken);
 
+        if (_config.SoullockeEnabled)
+        {
+            await ImportSoullockeRunAsync(cancellationToken);
+        }
+
         var locallyStoredPokemon =
             await _knownPokemon.GetAllAsync(cancellationToken);
 
@@ -72,6 +77,52 @@ public sealed class SyncService
                 _config.PollIntervalMilliseconds,
                 cancellationToken);
         }
+    }
+
+    private async Task ImportSoullockeRunAsync(
+        CancellationToken cancellationToken)
+    {
+        var run = await _soullockeClient.LoadRunAsync(cancellationToken);
+
+        foreach (var pair in run.Encounters)
+        {
+            var location = pair.Key;
+            var encounter = pair.Value;
+            if (encounter.Pokemon <= 0)
+            {
+                continue;
+            }
+
+            var uniqueId = $"soullocke:{_config.PlayerId}:{location}";
+            if (!_knownPokemon.Contains(uniqueId))
+            {
+                await _knownPokemon.AddAsync(
+                    uniqueId,
+                    new KnownPokemonEntry
+                    {
+                        UniqueId = uniqueId,
+                        SpeciesId = encounter.Pokemon,
+                        Species = $"Pokémon #{encounter.Pokemon}",
+                        Nickname = encounter.Nickname,
+                        Location = location,
+                        CurrentHp = string.Equals(
+                            encounter.Status,
+                            "fainted",
+                            StringComparison.OrdinalIgnoreCase)
+                                ? 0
+                                : 1,
+                        MaxHp = 1
+                    },
+                    cancellationToken);
+            }
+
+            await _knownPokemon.MarkSoullockeSyncedAsync(
+                uniqueId,
+                cancellationToken);
+        }
+
+        Console.WriteLine(
+            $"Soullocke-Initialisierung: {run.Encounters.Count} Begegnungen gelesen.");
     }
 
     private async Task SynchronizeOnceAsync(
