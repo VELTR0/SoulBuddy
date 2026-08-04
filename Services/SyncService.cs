@@ -59,6 +59,12 @@ public sealed class SyncService
     private async Task ImportSoullockeRunAsync(CancellationToken cancellationToken)
     {
         var run = await _soullockeClient.LoadRunAsync(cancellationToken);
+        await PullRemoteEncountersAsync(run, cancellationToken);
+        Console.WriteLine($"Soullocke-Initialisierung: {run.Encounters.Count} Begegnungen mit Status gelesen.");
+    }
+
+    private async Task PullRemoteEncountersAsync(SoullockeRun run, CancellationToken cancellationToken)
+    {
         foreach (var pair in run.Encounters)
         {
             if (pair.Value.Pokemon <= 0) continue;
@@ -70,16 +76,15 @@ public sealed class SyncService
                 NormalizeStatus(pair.Value.Status),
                 cancellationToken);
         }
-        Console.WriteLine($"Soullocke-Initialisierung: {run.Encounters.Count} Begegnungen mit Status gelesen.");
     }
 
     private async Task SynchronizeOnceAsync(CancellationToken cancellationToken)
     {
         if (!_initialized) throw new InvalidOperationException("Der Soullocke-Startimport wurde noch nicht abgeschlossen.");
         var slots = await _partySource.ReadAllPokemonAsync(cancellationToken);
-        SoullockeRun? run = _config.SoullockeEnabled
-            ? await _soullockeClient.LoadRunAsync(cancellationToken)
-            : null;
+        SoullockeRun? run = _config.SoullockeEnabled ? await _soullockeClient.LoadRunAsync(cancellationToken) : null;
+        if (run is not null) await PullRemoteEncountersAsync(run, cancellationToken);
+
         var runChanged = false;
         var faintedLocations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -101,14 +106,24 @@ public sealed class SyncService
                 gameEntry.UniqueId, gameEntry, slot.Box is not null, cancellationToken);
 
             if (run is null || mappedLocation is null) continue;
-            var newStatus = pokemon.Hp.Current <= 0 ? "fainted" : slot.Box is not null ? "boxed" : "alive";
             if (!run.Encounters.TryGetValue(mappedLocation, out var encounter))
             {
                 encounter = new SoullockeEncounter();
                 run.Encounters[mappedLocation] = encounter;
             }
+
             var oldStatus = NormalizeStatus(encounter.Status);
+            var gameStatus = pokemon.Hp.Current <= 0 ? "fainted" : slot.Box is not null ? "boxed" : "alive";
+            var newStatus = oldStatus is "brofailed" or "notcaught" ? oldStatus : gameStatus;
             var nickname = string.IsNullOrWhiteSpace(pokemon.Nickname) ? null : pokemon.Nickname;
+
+            // Restore remote failure states locally after enriching all other fields from the game.
+            if (newStatus is "brofailed" or "notcaught")
+            {
+                await _knownPokemon.UpsertSoullockeEncounterAsync(
+                    mergedId, pokemon.Species, nickname, mappedLocation, newStatus, cancellationToken);
+            }
+
             if (encounter.Pokemon != pokemon.Species || encounter.Nickname != nickname || oldStatus != newStatus)
             {
                 encounter.Pokemon = pokemon.Species;
