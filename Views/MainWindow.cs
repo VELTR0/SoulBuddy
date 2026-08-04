@@ -17,6 +17,7 @@ public sealed class MainWindow : Window
     private readonly PokemonVisualService _visualService = new();
     private readonly SoulBuddyNetworkService _networkService = new();
     private readonly SessionContext? _sessionContext;
+    private readonly DispatcherTimer _partnerSearchAnimationTimer;
     private readonly Grid _partyPanel = new()
     {
         RowDefinitions = new RowDefinitions("*,*,*,*,*,*"),
@@ -26,12 +27,19 @@ public sealed class MainWindow : Window
     private TextBlock? _networkStatusText;
     private TextBlock? _partnerSummaryText;
     private bool _compact;
+    private int _partnerSearchDotCount;
     private SoulBuddyNetworkState _lastRenderedNetworkState = SoulBuddyNetworkState.Idle;
     private string _lastPartnerPartySignature = string.Empty;
 
     public MainWindow(SessionContext? sessionContext = null)
     {
         _sessionContext = sessionContext;
+        _partnerSearchAnimationTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _partnerSearchAnimationTimer.Tick += OnPartnerSearchAnimationTick;
+
         Title = sessionContext is null
             ? "SoulBuddy"
             : $"SoulBuddy · {sessionContext.Session.Name} · {sessionContext.LocalPlayer.DisplayName}";
@@ -180,8 +188,9 @@ public sealed class MainWindow : Window
         _partnerSummaryText.TextWrapping = TextWrapping.Wrap;
         partnerStack.Children.Add(_partnerSummaryText);
 
-        _networkStatusText = Text(_networkService.StatusText, 9, FontWeight.Normal, "#94A3B8");
+        _networkStatusText = Text(string.Empty, 9, FontWeight.Normal, "#94A3B8");
         _networkStatusText.TextWrapping = TextWrapping.Wrap;
+        _networkStatusText.IsVisible = false;
         partnerStack.Children.Add(_networkStatusText);
 
         Grid.SetColumn(partnerStack, 4);
@@ -206,10 +215,42 @@ public sealed class MainWindow : Window
         VerticalAlignment = VerticalAlignment.Stretch
     };
 
+    private bool IsSearchingForPartner =>
+        _networkService.State is SoulBuddyNetworkState.Waiting
+            or SoulBuddyNetworkState.Connecting
+            or SoulBuddyNetworkState.Error;
+
+    private void OnPartnerSearchAnimationTick(object? sender, EventArgs eventArgs)
+    {
+        if (!IsSearchingForPartner || _networkService.LatestRemoteSnapshot is not null)
+        {
+            return;
+        }
+
+        _partnerSearchDotCount = (_partnerSearchDotCount + 1) % 4;
+        ShowPartnerSearchText();
+    }
+
+    private void ShowPartnerSearchText()
+    {
+        if (_partnerSummaryText is null)
+        {
+            return;
+        }
+
+        _partnerSummaryText.Text = "Suche Mitspieler" + new string('.', _partnerSearchDotCount);
+        _partnerSummaryText.Foreground = Brush("#CBD5E1");
+    }
+
     private void OnNetworkStatusChanged(object? sender, EventArgs eventArgs)
     {
         Dispatcher.UIThread.Post(() =>
         {
+            if (IsSearchingForPartner)
+            {
+                _partnerSearchDotCount = 0;
+            }
+
             UpdatePartnerSummary(_networkService.LatestRemoteSnapshot);
 
             if (_lastRenderedNetworkState != _networkService.State)
@@ -253,31 +294,23 @@ public sealed class MainWindow : Window
                     $"Team: {snapshot.Party.Count}/6 · Gespeichert: {snapshot.StoredPokemonCount}";
                 _partnerSummaryText.Foreground = Brush("#CBD5E1");
             }
+            else if (IsSearchingForPartner)
+            {
+                ShowPartnerSearchText();
+            }
             else
             {
-                _partnerSummaryText.Text = _networkService.State switch
-                {
-                    SoulBuddyNetworkState.Connected => "Warte auf Partnerdaten …",
-                    SoulBuddyNetworkState.Waiting => "Warte auf Mitspieler …",
-                    SoulBuddyNetworkState.Connecting => "Suche nach Mitspieler …",
-                    SoulBuddyNetworkState.Error => "Netzwerkfehler",
-                    _ => "Nicht verbunden"
-                };
-                _partnerSummaryText.Foreground = Brush(
-                    _networkService.State == SoulBuddyNetworkState.Error
-                        ? "#FCA5A5"
-                        : "#CBD5E1");
+                _partnerSummaryText.Text = _networkService.State == SoulBuddyNetworkState.Connected
+                    ? "Warte auf Partnerdaten …"
+                    : "Nicht verbunden";
+                _partnerSummaryText.Foreground = Brush("#CBD5E1");
             }
         }
 
         if (_networkStatusText is not null)
         {
-            var hideTechnicalStatus = _networkService.State == SoulBuddyNetworkState.Connected;
-            _networkStatusText.Text = hideTechnicalStatus
-                ? string.Empty
-                : _networkService.StatusText;
-            _networkStatusText.IsVisible = !hideTechnicalStatus;
-            _networkStatusText.Foreground = Brush("#94A3B8");
+            _networkStatusText.Text = string.Empty;
+            _networkStatusText.IsVisible = false;
         }
     }
 
@@ -609,6 +642,7 @@ public sealed class MainWindow : Window
 
     private async void OnOpened(object? sender, EventArgs eventArgs)
     {
+        _partnerSearchAnimationTimer.Start();
         ApplyResponsiveLayout();
         RenderParty();
         RenderStoredPokemon();
@@ -620,6 +654,8 @@ public sealed class MainWindow : Window
 
     private async void OnClosing(object? sender, WindowClosingEventArgs eventArgs)
     {
+        _partnerSearchAnimationTimer.Stop();
+        _partnerSearchAnimationTimer.Tick -= OnPartnerSearchAnimationTick;
         _networkService.StatusChanged -= OnNetworkStatusChanged;
         _networkService.PlayerSnapshotReceived -= OnPlayerSnapshotReceived;
         await _networkService.DisposeAsync();
