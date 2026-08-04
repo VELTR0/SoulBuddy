@@ -38,20 +38,9 @@ public sealed class KnownPokemonStore
 
     public async Task LoadAsync(CancellationToken cancellationToken)
     {
-        _knownPokemonIds.Clear();
-        _soullockeSyncedPokemonIds.Clear();
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await EnsureSchemaAsync(connection, cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT unique_id, soullocke_synced FROM known_pokemon;";
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            var id = reader.GetString(0);
-            _knownPokemonIds.Add(id);
-            if (reader.GetInt32(1) != 0) _soullockeSyncedPokemonIds.Add(id);
-        }
+        await using var connection = await OpenAsync(cancellationToken);
+        await ConsolidateDuplicatesAsync(connection, cancellationToken);
+        await ReloadCachesAsync(connection, cancellationToken);
     }
 
     public bool Contains(string id) => _knownPokemonIds.Contains(id);
@@ -59,108 +48,107 @@ public sealed class KnownPokemonStore
 
     public async Task AddAsync(string id, KnownPokemonEntry entry, CancellationToken cancellationToken)
     {
-        if (_knownPokemonIds.Contains(id)) return;
-        var now = DateTimeOffset.UtcNow;
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await EnsureSchemaAsync(connection, cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            INSERT OR IGNORE INTO known_pokemon
-            (unique_id,species_id,species,nickname,pid,original_trainer_id,original_trainer_secret_id,
-             location,location_id,level_met,current_level,current_hp,max_hp,is_egg,first_seen_at,last_seen_at,
-             soullocke_synced,encounter_status)
-            VALUES
-            ($id,$speciesId,$species,$nickname,$pid,$otId,$otSecret,$location,$locationId,$levelMet,
-             $level,$hp,$maxHp,$isEgg,$firstSeen,$lastSeen,0,$status);
-            """;
-        AddEntryParameters(command, id, entry, now);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-        _knownPokemonIds.Add(id);
+        await using var connection = await OpenAsync(cancellationToken);
+        await InsertAsync(connection, id, entry, cancellationToken);
+        await ReloadCachesAsync(connection, cancellationToken);
     }
 
     public async Task<KnownPokemonEntry?> FindByLocationAsync(string location, CancellationToken cancellationToken)
     {
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await EnsureSchemaAsync(connection, cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT unique_id,species_id,species,nickname,pid,original_trainer_id,original_trainer_secret_id,
-                   location,location_id,level_met,current_level,current_hp,max_hp,is_egg,first_seen_at,last_seen_at,
-                   soullocke_synced,encounter_status
-            FROM known_pokemon WHERE lower(trim(location))=lower(trim($location)) LIMIT 1;
-            """;
-        command.Parameters.AddWithValue("$location", location);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? ReadEntry(reader) : null;
+        await using var connection = await OpenAsync(cancellationToken);
+        return await FindOneAsync(connection,
+            "lower(trim(location)) = lower(trim($value))",
+            location,
+            cancellationToken);
+    }
+
+    public async Task<KnownPokemonEntry?> FindBySpeciesAsync(int speciesId, CancellationToken cancellationToken)
+    {
+        if (speciesId <= 0) return null;
+        await using var connection = await OpenAsync(cancellationToken);
+        return await FindOneAsync(connection, "species_id = $value", speciesId, cancellationToken);
     }
 
     public async Task UpsertSoullockeEncounterAsync(
         string id, int speciesId, string? nickname, string location, string status,
         CancellationToken cancellationToken)
     {
-        var existing = await FindByLocationAsync(location, cancellationToken);
+        await using var connection = await OpenAsync(cancellationToken);
+
+        // Soullocke is authoritative. Prefer an existing row of the same species,
+        // then the same encounter location. This prevents old PID rows from
+        // appearing beside their imported Soullocke counterpart.
+        var existing = await FindOneAsync(connection, "species_id = $value", speciesId, cancellationToken)
+            ?? await FindOneAsync(connection, "lower(trim(location)) = lower(trim($value))", location, cancellationToken);
         var targetId = existing?.UniqueId ?? id;
+
         if (existing is null)
         {
-            await AddAsync(targetId, new KnownPokemonEntry
+            await InsertAsync(connection, targetId, new KnownPokemonEntry
             {
                 UniqueId = targetId,
                 SpeciesId = speciesId,
                 Species = $"Pokémon #{speciesId}",
                 Nickname = nickname,
                 Location = location,
-                CurrentHp = status == "fainted" ? 0 : 1,
+                CurrentHp = NormalizeStatus(status) == "fainted" ? 0 : 1,
                 MaxHp = 1,
                 EncounterStatus = status
             }, cancellationToken);
         }
 
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await EnsureSchemaAsync(connection, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            UPDATE known_pokemon SET species_id=$speciesId,
-                nickname=COALESCE($nickname,nickname), encounter_status=$status,
+            UPDATE known_pokemon
+            SET species_id=$speciesId,
+                nickname=COALESCE($nickname,nickname),
+                location=$location,
+                encounter_status=$status,
                 current_hp=CASE WHEN $status='fainted' THEN 0 ELSE current_hp END,
                 max_hp=CASE WHEN max_hp=0 THEN 1 ELSE max_hp END,
-                soullocke_synced=1,last_seen_at=$now WHERE unique_id=$id;
+                soullocke_synced=1,
+                last_seen_at=$now
+            WHERE unique_id=$id;
             """;
         command.Parameters.AddWithValue("$id", targetId);
         command.Parameters.AddWithValue("$speciesId", speciesId);
         command.Parameters.AddWithValue("$nickname", nickname is null ? DBNull.Value : nickname);
+        command.Parameters.AddWithValue("$location", location);
         command.Parameters.AddWithValue("$status", NormalizeStatus(status));
         command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
-        _knownPokemonIds.Add(targetId);
-        _soullockeSyncedPokemonIds.Add(targetId);
+
+        await ConsolidateDuplicatesAsync(connection, cancellationToken);
+        await ReloadCachesAsync(connection, cancellationToken);
     }
 
     public async Task<string> MergeGamePokemonAsync(
         string gameId, KnownPokemonEntry gameEntry, bool inBox, CancellationToken cancellationToken)
     {
-        var byLocation = await FindByLocationAsync(gameEntry.Location, cancellationToken);
-        var targetId = byLocation?.UniqueId ?? gameId;
-        if (byLocation is null && !Contains(gameId))
-            await AddAsync(gameId, gameEntry, cancellationToken);
+        await using var connection = await OpenAsync(cancellationToken);
 
-        var previousStatus = byLocation?.EncounterStatus ?? "alive";
+        // One encounter per species. A Soullocke row wins as identity, while
+        // all richer Pokémon data from the emulator overwrites its placeholders.
+        var existing = await FindOneAsync(connection, "species_id = $value", gameEntry.SpeciesId, cancellationToken)
+            ?? await FindOneAsync(connection, "lower(trim(location)) = lower(trim($value))", gameEntry.Location, cancellationToken);
+        var targetId = existing?.UniqueId ?? gameId;
+
+        if (existing is null)
+            await InsertAsync(connection, targetId, gameEntry, cancellationToken);
+
+        var previousStatus = existing?.EncounterStatus ?? "alive";
         var nextStatus = gameEntry.CurrentHp <= 0 ? "fainted" : inBox ? "boxed" : "alive";
-        // Explicit Soullocke failure states stay authoritative until a real caught Pokémon appears.
-        if ((previousStatus is "notcaught" or "brofailed") && gameEntry.Pid == 0)
-            nextStatus = previousStatus;
+        if (previousStatus is "notcaught" or "brofailed") nextStatus = previousStatus;
 
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await EnsureSchemaAsync(connection, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            UPDATE known_pokemon SET species_id=$speciesId,species=$species,nickname=$nickname,pid=$pid,
-                original_trainer_id=$otId,original_trainer_secret_id=$otSecret,location_id=$locationId,
-                level_met=$levelMet,current_level=$level,current_hp=$hp,max_hp=$maxHp,is_egg=$isEgg,
-                encounter_status=$status,last_seen_at=$now WHERE unique_id=$id;
+            UPDATE known_pokemon
+            SET species_id=$speciesId,species=$species,nickname=$nickname,pid=$pid,
+                original_trainer_id=$otId,original_trainer_secret_id=$otSecret,
+                location=$location,location_id=$locationId,level_met=$levelMet,
+                current_level=$level,current_hp=$hp,max_hp=$maxHp,is_egg=$isEgg,
+                encounter_status=$status,last_seen_at=$now
+            WHERE unique_id=$id;
             """;
         command.Parameters.AddWithValue("$id", targetId);
         command.Parameters.AddWithValue("$speciesId", gameEntry.SpeciesId);
@@ -169,6 +157,7 @@ public sealed class KnownPokemonStore
         command.Parameters.AddWithValue("$pid", gameEntry.Pid);
         command.Parameters.AddWithValue("$otId", gameEntry.OriginalTrainerId);
         command.Parameters.AddWithValue("$otSecret", gameEntry.OriginalTrainerSecretId);
+        command.Parameters.AddWithValue("$location", gameEntry.Location);
         command.Parameters.AddWithValue("$locationId", gameEntry.LocationId);
         command.Parameters.AddWithValue("$levelMet", gameEntry.LevelMet);
         command.Parameters.AddWithValue("$level", gameEntry.CurrentLevel);
@@ -178,14 +167,15 @@ public sealed class KnownPokemonStore
         command.Parameters.AddWithValue("$status", nextStatus);
         command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await ConsolidateDuplicatesAsync(connection, cancellationToken);
+        await ReloadCachesAsync(connection, cancellationToken);
         return targetId;
     }
 
     public async Task UpdateCurrentStateAsync(string id, int level, int hp, int maxHp, CancellationToken cancellationToken)
     {
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var connection = await OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = "UPDATE known_pokemon SET current_level=$level,current_hp=$hp,max_hp=$maxHp,last_seen_at=$now WHERE unique_id=$id;";
         command.Parameters.AddWithValue("$id", id);
@@ -198,21 +188,16 @@ public sealed class KnownPokemonStore
 
     public async Task<IReadOnlyList<KnownPokemonEntry>> GetAllAsync(CancellationToken cancellationToken)
     {
+        await using var connection = await OpenAsync(cancellationToken);
+        await ConsolidateDuplicatesAsync(connection, cancellationToken);
+
         var result = new List<KnownPokemonEntry>();
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await EnsureSchemaAsync(connection, cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT unique_id,species_id,species,nickname,pid,original_trainer_id,original_trainer_secret_id,
-                   location,location_id,level_met,current_level,current_hp,max_hp,is_egg,first_seen_at,last_seen_at,
-                   soullocke_synced,encounter_status FROM known_pokemon ORDER BY first_seen_at;
-            """;
+        command.CommandText = SelectColumns + " ORDER BY first_seen_at;";
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
             var entry = ReadEntry(reader);
-            // Existing UI displays Location for unsynced entries. Return a presentation copy with status appended.
             entry.Location = $"{entry.Location} · {StatusDisplay(entry.EncounterStatus)}";
             entry.SoullockeSynced = false;
             result.Add(entry);
@@ -222,14 +207,116 @@ public sealed class KnownPokemonStore
 
     public async Task MarkSoullockeSyncedAsync(string id, CancellationToken cancellationToken)
     {
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await EnsureSchemaAsync(connection, cancellationToken);
+        await using var connection = await OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = "UPDATE known_pokemon SET soullocke_synced=1 WHERE unique_id=$id;";
         command.Parameters.AddWithValue("$id", id);
         await command.ExecuteNonQueryAsync(cancellationToken);
         _soullockeSyncedPokemonIds.Add(id);
+    }
+
+    private const string SelectColumns = """
+        SELECT unique_id,species_id,species,nickname,pid,original_trainer_id,original_trainer_secret_id,
+               location,location_id,level_met,current_level,current_hp,max_hp,is_egg,first_seen_at,last_seen_at,
+               soullocke_synced,encounter_status FROM known_pokemon
+        """;
+
+    private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
+    {
+        var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await EnsureSchemaAsync(connection, cancellationToken);
+        return connection;
+    }
+
+    private static async Task<KnownPokemonEntry?> FindOneAsync(
+        SqliteConnection connection, string predicate, object value, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"{SelectColumns} WHERE {predicate} ORDER BY CASE WHEN unique_id LIKE 'soullocke:%' THEN 0 ELSE 1 END, current_level DESC LIMIT 1;";
+        command.Parameters.AddWithValue("$value", value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadEntry(reader) : null;
+    }
+
+    private static async Task InsertAsync(SqliteConnection connection, string id, KnownPokemonEntry e, CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR IGNORE INTO known_pokemon
+            (unique_id,species_id,species,nickname,pid,original_trainer_id,original_trainer_secret_id,
+             location,location_id,level_met,current_level,current_hp,max_hp,is_egg,first_seen_at,last_seen_at,
+             soullocke_synced,encounter_status)
+            VALUES($id,$speciesId,$species,$nickname,$pid,$otId,$otSecret,$location,$locationId,$levelMet,
+                   $level,$hp,$maxHp,$isEgg,$firstSeen,$lastSeen,0,$status);
+            """;
+        AddEntryParameters(command, id, e, now);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task ConsolidateDuplicatesAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        // Keep one row per valid species. Prefer a Soullocke identity, then the
+        // row with the richest game data. Copy that game data into the keeper
+        // before deleting the remaining historic rows.
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            WITH ranked AS (
+                SELECT unique_id,species_id,
+                       FIRST_VALUE(unique_id) OVER (
+                           PARTITION BY species_id
+                           ORDER BY CASE WHEN unique_id LIKE 'soullocke:%' THEN 0 ELSE 1 END,
+                                    CASE WHEN pid <> 0 THEN 0 ELSE 1 END,
+                                    current_level DESC,last_seen_at DESC) AS keeper_id,
+                       FIRST_VALUE(unique_id) OVER (
+                           PARTITION BY species_id
+                           ORDER BY CASE WHEN pid <> 0 THEN 0 ELSE 1 END,
+                                    current_level DESC,last_seen_at DESC) AS data_id,
+                       ROW_NUMBER() OVER (PARTITION BY species_id ORDER BY unique_id) AS row_no
+                FROM known_pokemon WHERE species_id > 0
+            )
+            UPDATE known_pokemon
+            SET species=(SELECT species FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                nickname=(SELECT nickname FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                pid=(SELECT pid FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                original_trainer_id=(SELECT original_trainer_id FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                original_trainer_secret_id=(SELECT original_trainer_secret_id FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                location=(SELECT location FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                location_id=(SELECT location_id FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                level_met=(SELECT level_met FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                current_level=(SELECT current_level FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                current_hp=(SELECT current_hp FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                max_hp=(SELECT max_hp FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id)),
+                is_egg=(SELECT is_egg FROM known_pokemon d WHERE d.unique_id=(SELECT data_id FROM ranked r WHERE r.unique_id=known_pokemon.unique_id))
+            WHERE unique_id IN (SELECT keeper_id FROM ranked);
+
+            DELETE FROM known_pokemon
+            WHERE species_id > 0
+              AND unique_id NOT IN (
+                  SELECT FIRST_VALUE(unique_id) OVER (
+                      PARTITION BY species_id
+                      ORDER BY CASE WHEN unique_id LIKE 'soullocke:%' THEN 0 ELSE 1 END,
+                               CASE WHEN pid <> 0 THEN 0 ELSE 1 END,
+                               current_level DESC,last_seen_at DESC)
+                  FROM known_pokemon WHERE species_id > 0);
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private async Task ReloadCachesAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        _knownPokemonIds.Clear();
+        _soullockeSyncedPokemonIds.Clear();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT unique_id,soullocke_synced FROM known_pokemon;";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var id = reader.GetString(0);
+            _knownPokemonIds.Add(id);
+            if (reader.GetInt32(1) != 0) _soullockeSyncedPokemonIds.Add(id);
+        }
     }
 
     private static string NormalizeStatus(string? status) => (status ?? "alive").Trim().ToLowerInvariant() switch
