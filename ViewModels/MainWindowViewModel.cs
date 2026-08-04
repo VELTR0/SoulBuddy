@@ -123,8 +123,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             ConnectionText = _runtime.Config.SoullockeEnabled
                 ? "Soullocke aktiviert"
                 : "Lokal / Offline";
-            LocalPlayerStatus = "🟢 Collector verbunden";
-            LocalGameText = "Spiel: HeartGold / SoulSilver";
+            LocalPlayerStatus = "🟢 Spiel  verbunden: HeartGold / SoulSilver";
             PartnerStatus = "Offline · Über die Netzwerksteuerung optional verbinden";
             AddActivity("SoulBuddy gestartet");
             AddActivity("Emulator-Collector verbunden");
