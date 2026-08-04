@@ -23,7 +23,11 @@ public sealed class MainWindow : Window
         RowDefinitions = new RowDefinitions("*,*,*,*,*,*"),
         RowSpacing = 5
     };
-    private readonly StackPanel _storedPanel = new() { Spacing = 7 };
+    private readonly StackPanel _storedPanel = new()
+    {
+        Spacing = 7,
+        Margin = new Thickness(0, 0, 8, 0)
+    };
     private TextBlock? _networkStatusText;
     private TextBlock? _partnerSummaryText;
     private bool _compact;
@@ -77,7 +81,7 @@ public sealed class MainWindow : Window
         };
         Grid.SetRow(content, 2);
         content.Children.Add(Card(BuildPartySection()));
-        var stored = Card(BuildScrollableSection("Gespeicherte Pokémon", "PokemonCountText", _storedPanel));
+        var stored = Card(BuildScrollableSection("Gefangene Pokémon", "PokemonCountText", _storedPanel));
         Grid.SetColumn(stored, 1);
         content.Children.Add(stored);
         var right = Card(BuildRightColumn());
@@ -342,6 +346,7 @@ public sealed class MainWindow : Window
         var scroll = new ScrollViewer
         {
             Content = content,
+            Margin = new Thickness(0, 0, -8, 0),
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
