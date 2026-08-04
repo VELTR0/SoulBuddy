@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -25,7 +24,7 @@ internal static class DirectSoulLinkUiUpdater
         BindingFlags.Instance | BindingFlags.NonPublic);
 
     private static readonly Dictionary<Button, PartnerView> Views = [];
-    private static readonly Dictionary<MainWindow, string> LastDiagnosticSignatures = [];
+    private static readonly Dictionary<MainWindow, string> LastSignatures = [];
     private static readonly HashSet<MainWindow> VisualTreeLogged = [];
     private static readonly PokemonVisualService VisualService = new();
     private static DispatcherTimer? _timer;
@@ -33,21 +32,28 @@ internal static class DirectSoulLinkUiUpdater
     [ModuleInitializer]
     internal static void Initialize()
     {
-        SoulLinkDiagnosticLog.Write(
-            "BOOT",
-            $"SoulLink diagnostics started. " +
-            $"pid={Environment.ProcessId} base='{AppContext.BaseDirectory}'");
-
         Dispatcher.UIThread.Post(() =>
         {
             _timer = new DispatcherTimer
             {
-                Interval = TimeSpan.FromMilliseconds(350)
+                Interval = TimeSpan.FromMilliseconds(500)
             };
-            _timer.Tick += (_, _) => UpdateOpenWindows();
+            _timer.Tick += (_, _) => UpdateOpenWindowsSafely();
             _timer.Start();
-            UpdateOpenWindows();
+            UpdateOpenWindowsSafely();
         });
+    }
+
+    private static void UpdateOpenWindowsSafely()
+    {
+        try
+        {
+            UpdateOpenWindows();
+        }
+        catch (Exception ex)
+        {
+            SoulLinkDiagnosticLog.Write("ERROR", ex.ToString());
+        }
     }
 
     private static void UpdateOpenWindows()
@@ -60,40 +66,45 @@ internal static class DirectSoulLinkUiUpdater
 
         var network = SoulBuddyNetworkService.Current;
         var connected = network?.State == SoulBuddyNetworkState.Connected;
-        var snapshot = network?.LatestRemoteSnapshot;
-        var remoteParty = connected ? snapshot?.Party ?? [] : [];
+        var remotePlayerName = network?.RemotePlayerName ?? string.Empty;
+        var remoteParty = connected
+            ? network?.LatestRemoteSnapshot?.Party ?? []
+            : [];
 
-        foreach (var window in desktop.Windows.OfType<MainWindow>())
+        var windows = desktop.Windows.OfType<MainWindow>().ToArray();
+        foreach (var window in windows)
         {
-            UpdateTeamCards(
-                window,
-                remoteParty,
-                connected,
-                snapshot?.PlayerName ?? network?.RemotePlayerName ?? string.Empty);
+            try
+            {
+                UpdateTeamCards(
+                    window,
+                    connected,
+                    remotePlayerName,
+                    remoteParty);
+            }
+            catch (Exception ex)
+            {
+                SoulLinkDiagnosticLog.Write(
+                    "ERROR",
+                    $"Window '{window.Title}': {ex}");
+            }
         }
 
-        RemoveDetachedViews(desktop.Windows.OfType<MainWindow>());
+        RemoveDetachedViews(windows);
     }
 
     private static void UpdateTeamCards(
         MainWindow window,
-        IReadOnlyList<NetworkPokemonSnapshot> remoteParty,
         bool connected,
-        string remotePlayerName)
+        string remotePlayerName,
+        IReadOnlyList<NetworkPokemonSnapshot> remoteParty)
     {
-        if (PartyPanelField?.GetValue(window) is not Grid partyPanel)
+        if (PartyPanelField?.GetValue(window) is not Grid partyPanel ||
+            ViewModelField?.GetValue(window) is not MainWindowViewModel viewModel)
         {
             SoulLinkDiagnosticLog.Write(
                 "ERROR",
-                $"Window '{window.Title}': _partyPanel field was not found or is not a Grid.");
-            return;
-        }
-
-        if (ViewModelField?.GetValue(window) is not MainWindowViewModel viewModel)
-        {
-            SoulLinkDiagnosticLog.Write(
-                "ERROR",
-                $"Window '{window.Title}': _viewModel field was not found.");
+                $"Window '{window.Title}': party panel or view model not found.");
             return;
         }
 
@@ -101,27 +112,28 @@ internal static class DirectSoulLinkUiUpdater
             .GetVisualDescendants()
             .OfType<Button>()
             .ToArray();
+
         var cards = allButtons
             .Where(IsPartyPokemonCard)
             .OrderBy(GetPartyCardOrder)
             .Take(6)
             .ToArray();
-        var localParty = viewModel.Party.ToArray();
 
-        var diagnosticSignature = BuildDiagnosticSignature(
+        var localParty = viewModel.Party.ToArray();
+        var signature = BuildSignature(
             connected,
             remotePlayerName,
             localParty,
             remoteParty,
             allButtons.Length,
             cards.Length);
-        var shouldLog = !LastDiagnosticSignatures.TryGetValue(window, out var previous) ||
-                        !string.Equals(previous, diagnosticSignature, StringComparison.Ordinal);
+        var shouldLog = !LastSignatures.TryGetValue(window, out var oldSignature) ||
+                        oldSignature != signature;
+        LastSignatures[window] = signature;
 
         if (shouldLog)
         {
-            LastDiagnosticSignatures[window] = diagnosticSignature;
-            LogSnapshotAndUiState(
+            LogState(
                 window,
                 partyPanel,
                 connected,
@@ -157,22 +169,19 @@ internal static class DirectSoulLinkUiUpdater
             var view = GetOrCreateView(card, index, shouldLog);
             if (view is null)
             {
-                if (shouldLog)
-                {
-                    SoulLinkDiagnosticLog.Write(
-                        "UI",
-                        $"Local #{index}: PartnerView creation FAILED.");
-                }
+                SoulLinkDiagnosticLog.Write(
+                    "UI",
+                    $"Local #{index}: PartnerView creation FAILED.");
                 continue;
             }
 
             var localLocation = NormalizeLocation(local.Subtitle);
             Candidate? match = null;
-            var matchReason = string.Empty;
+            var reason = string.Empty;
 
             if (shouldLog)
             {
-                LogLocalAndComparisons(index, local, localLocation, available);
+                LogComparisons(index, local, localLocation, available);
             }
 
             if (localLocation.Length > 0)
@@ -181,7 +190,7 @@ internal static class DirectSoulLinkUiUpdater
                     NormalizeLocation(candidate.Pokemon.Location) == localLocation);
                 if (match is not null)
                 {
-                    matchReason = "Location";
+                    reason = "Location";
                 }
             }
 
@@ -191,16 +200,17 @@ internal static class DirectSoulLinkUiUpdater
                     IsSamePokemon(local, candidate.Pokemon));
                 if (match is not null)
                 {
-                    matchReason = "Pokemon identity";
+                    reason = "Pokemon identity";
                 }
             }
 
             if (match is null && !anyLocationOverlap)
             {
-                match = available.FirstOrDefault(candidate => candidate.Index == index);
+                match = available.FirstOrDefault(candidate =>
+                    candidate.Index == index);
                 if (match is not null)
                 {
-                    matchReason = "Team slot fallback";
+                    reason = "Team slot fallback";
                 }
             }
 
@@ -211,12 +221,7 @@ internal static class DirectSoulLinkUiUpdater
                 {
                     SoulLinkDiagnosticLog.Write(
                         "RESULT",
-                        $"Local #{index} '{local.NameLine}': NO MATCH FOUND. " +
-                        $"location='{local.Subtitle}', normalized='{localLocation}'.");
-                    SoulLinkDiagnosticLog.Write(
-                        "UI",
-                        $"Local #{index}: ShowUnlinked completed. " +
-                        $"viewAttached={ReferenceEquals(view.Border.Parent, card.Content) || view.Border.Parent is not null}.");
+                        $"Local #{index} '{local.NameLine}': NO MATCH FOUND.");
                 }
                 continue;
             }
@@ -231,198 +236,15 @@ internal static class DirectSoulLinkUiUpdater
                     "RESULT",
                     $"MATCHED local #{index} '{local.NameLine}' -> " +
                     $"remote #{match.Index} '{DisplayName(match.Pokemon)}'. " +
-                    $"reason={matchReason}, localLocation='{local.Subtitle}', " +
+                    $"reason={reason}, localLocation='{local.Subtitle}', " +
                     $"remoteLocation='{match.Pokemon.Location}'.");
                 SoulLinkDiagnosticLog.Write(
                     "UI",
                     $"Local #{index}: ShowLinked completed. " +
                     $"partnerName='{view.Name.Text}', speciesId={view.SpeciesId}, " +
-                    $"borderVisible={view.Border.IsVisible}, " +
-                    $"borderBounds={view.Border.Bounds.Width:0.#}x{view.Border.Bounds.Height:0.#}.");
+                    $"borderVisible={view.Border.IsVisible}.");
             }
         }
-
-        if (shouldLog && count == 0)
-        {
-            SoulLinkDiagnosticLog.Write(
-                "ERROR",
-                $"Window '{window.Title}': no team cards were processed. " +
-                $"localParty={localParty.Length}, matchingButtons={cards.Length}.");
-        }
-    }
-
-    private static void LogSnapshotAndUiState(
-        MainWindow window,
-        Grid partyPanel,
-        bool connected,
-        string remotePlayerName,
-        IReadOnlyList<PokemonCardViewModel> localParty,
-        IReadOnlyList<NetworkPokemonSnapshot> remoteParty,
-        IReadOnlyList<Button> allButtons,
-        IReadOnlyList<Button> cards)
-    {
-        SoulLinkDiagnosticLog.Write("BLOCK", new string('=', 72));
-        SoulLinkDiagnosticLog.Write(
-            "STATE",
-            $"window='{window.Title}' connected={connected} " +
-            $"remotePlayer='{remotePlayerName}' localParty={localParty.Count} " +
-            $"remoteParty={remoteParty.Count} allButtons={allButtons.Count} " +
-            $"partyCards={cards.Count}.");
-
-        SoulLinkDiagnosticLog.Write(
-            "SNAPSHOT",
-            $"Remote snapshot received: player='{remotePlayerName}', " +
-            $"partyCount={remoteParty.Count}.");
-        for (var index = 0; index < remoteParty.Count; index++)
-        {
-            var pokemon = remoteParty[index];
-            SoulLinkDiagnosticLog.Write(
-                "REMOTE",
-                $"[{index}] display='{pokemon.DisplayName}' species='{pokemon.SpeciesName}' " +
-                $"speciesId={pokemon.SpeciesId} location='{pokemon.Location}' " +
-                $"normalizedLocation='{NormalizeLocation(pokemon.Location)}' " +
-                $"level={pokemon.Level} hp={pokemon.CurrentHp}/{pokemon.MaxHp}.");
-        }
-
-        for (var index = 0; index < localParty.Count; index++)
-        {
-            var pokemon = localParty[index];
-            SoulLinkDiagnosticLog.Write(
-                "LOCAL",
-                $"[{index}] display='{pokemon.DisplayName}' species='{pokemon.Species}' " +
-                $"speciesId={pokemon.SpeciesId} location='{pokemon.Subtitle}' " +
-                $"normalizedLocation='{NormalizeLocation(pokemon.Subtitle)}' " +
-                $"level={pokemon.Level} hp={pokemon.CurrentHp}/{pokemon.MaxHp}.");
-        }
-
-        for (var index = 0; index < allButtons.Count; index++)
-        {
-            var button = allButtons[index];
-            var texts = button.GetVisualDescendants()
-                .OfType<TextBlock>()
-                .Select(text => text.Text ?? string.Empty)
-                .Where(text => text.Length > 0)
-                .ToArray();
-            SoulLinkDiagnosticLog.Write(
-                "BUTTON",
-                $"all[{index}] row={Grid.GetRow(button)} col={Grid.GetColumn(button)} " +
-                $"contentType='{button.Content?.GetType().Name ?? "null"}' " +
-                $"isPartyCard={IsPartyPokemonCard(button)} " +
-                $"texts=[{string.Join(" | ", texts)}].");
-        }
-
-        if (!VisualTreeLogged.Contains(window))
-        {
-            VisualTreeLogged.Add(window);
-            SoulLinkDiagnosticLog.Write(
-                "VISUAL-TREE",
-                $"One-time party VisualTree for '{window.Title}':\n" +
-                BuildVisualTree(partyPanel));
-        }
-    }
-
-    private static void LogLocalAndComparisons(
-        int localIndex,
-        PokemonCardViewModel local,
-        string localLocation,
-        IReadOnlyList<Candidate> available)
-    {
-        SoulLinkDiagnosticLog.Write(
-            "MATCH",
-            $"Local #{localIndex}: name='{local.NameLine}', species='{local.Species}', " +
-            $"location='{local.Subtitle}', normalized='{localLocation}', " +
-            $"level={local.Level}.");
-
-        foreach (var candidate in available)
-        {
-            var remote = candidate.Pokemon;
-            var remoteLocation = NormalizeLocation(remote.Location);
-            var locationMatch = localLocation.Length > 0 &&
-                                localLocation == remoteLocation;
-            var speciesMatch = IsSamePokemonIgnoringLevel(local, remote);
-            var levelMatch = local.Level <= 0 || local.Level == remote.Level;
-
-            SoulLinkDiagnosticLog.Write(
-                "COMPARE",
-                $"local#{localIndex} vs remote#{candidate.Index}: " +
-                $"remote='{DisplayName(remote)}', " +
-                $"localLocation='{local.Subtitle}', remoteLocation='{remote.Location}', " +
-                $"normalizedLocal='{localLocation}', normalizedRemote='{remoteLocation}', " +
-                $"LocationMatch={locationMatch}, SpeciesMatch={speciesMatch}, " +
-                $"LevelMatch={levelMatch}, IdentityMatch={IsSamePokemon(local, remote)}.");
-        }
-    }
-
-    private static string BuildDiagnosticSignature(
-        bool connected,
-        string remotePlayerName,
-        IReadOnlyList<PokemonCardViewModel> localParty,
-        IReadOnlyList<NetworkPokemonSnapshot> remoteParty,
-        int allButtonCount,
-        int cardCount)
-    {
-        var local = string.Join("|", localParty.Select(pokemon =>
-            $"{pokemon.SpeciesId}:{pokemon.Level}:{pokemon.CurrentHp}:" +
-            $"{NormalizeLocation(pokemon.Subtitle)}"));
-        var remote = string.Join("|", remoteParty.Select(pokemon =>
-            $"{pokemon.SpeciesId}:{pokemon.Level}:{pokemon.CurrentHp}:" +
-            $"{NormalizeLocation(pokemon.Location)}"));
-        return $"{connected}:{remotePlayerName}:{allButtonCount}:{cardCount}:" +
-               $"L={local}:R={remote}";
-    }
-
-    private static string BuildVisualTree(Control root)
-    {
-        var builder = new StringBuilder();
-        AppendVisual(root, builder, 0);
-        return builder.ToString();
-    }
-
-    private static void AppendVisual(Control control, StringBuilder builder, int depth)
-    {
-        builder.Append(' ', depth * 2)
-            .Append(control.GetType().Name)
-            .Append(" row=")
-            .Append(Grid.GetRow(control))
-            .Append(" col=")
-            .Append(Grid.GetColumn(control))
-            .Append(" visible=")
-            .Append(control.IsVisible)
-            .Append(" bounds=")
-            .Append(control.Bounds.Width.ToString("0.#"))
-            .Append('x')
-            .Append(control.Bounds.Height.ToString("0.#"));
-
-        if (control is TextBlock text && !string.IsNullOrWhiteSpace(text.Text))
-        {
-            builder.Append(" text='").Append(text.Text.Replace("\n", "\\n")).Append(''');
-        }
-        else if (control is Button button)
-        {
-            builder.Append(" contentType='")
-                .Append(button.Content?.GetType().Name ?? "null")
-                .Append(''');
-        }
-
-        builder.AppendLine();
-        foreach (var child in control.GetVisualChildren().OfType<Control>())
-        {
-            AppendVisual(child, builder, depth + 1);
-        }
-    }
-
-    private static bool IsPartyPokemonCard(Button card)
-    {
-        var texts = card.GetVisualDescendants().OfType<TextBlock>();
-        return texts.Any(text =>
-            text.Text?.StartsWith("📍", StringComparison.Ordinal) == true);
-    }
-
-    private static int GetPartyCardOrder(Button card)
-    {
-        var row = Grid.GetRow(card);
-        var column = Grid.GetColumn(card);
-        return row * 2 + column;
     }
 
     private static PartnerView? GetOrCreateView(
@@ -432,24 +254,11 @@ internal static class DirectSoulLinkUiUpdater
     {
         if (Views.TryGetValue(card, out var existing))
         {
-            if (log)
-            {
-                SoulLinkDiagnosticLog.Write(
-                    "UI",
-                    $"Local #{localIndex}: existing PartnerView found.");
-            }
             return existing;
         }
 
         if (card.Content is not Control originalContent)
         {
-            if (log)
-            {
-                SoulLinkDiagnosticLog.Write(
-                    "UI",
-                    $"Local #{localIndex}: card.Content is not a Control. " +
-                    $"actualType='{card.Content?.GetType().FullName ?? "null"}'.");
-            }
             return null;
         }
 
@@ -525,6 +334,10 @@ internal static class DirectSoulLinkUiUpdater
             ColumnSpacing = 5,
             MinWidth = 0
         };
+
+        // Avalonia controls may only have one visual parent. Detach the old
+        // button content before inserting it into the new two-column layout.
+        card.Content = null;
         layout.Children.Add(originalContent);
         Grid.SetColumn(partnerBorder, 1);
         layout.Children.Add(partnerBorder);
@@ -538,7 +351,6 @@ internal static class DirectSoulLinkUiUpdater
             SoulLinkDiagnosticLog.Write(
                 "UI",
                 $"Local #{localIndex}: PartnerView created and assigned. " +
-                $"newContentType='{card.Content.GetType().Name}', " +
                 $"layoutChildren={layout.Children.Count}.");
         }
 
@@ -547,11 +359,6 @@ internal static class DirectSoulLinkUiUpdater
 
     private static void ShowUnlinked(PartnerView view)
     {
-        if (view.Signature == "unlinked")
-        {
-            return;
-        }
-
         view.Signature = "unlinked";
         view.SpeciesId = 0;
         view.Image.Source = null;
@@ -591,50 +398,6 @@ internal static class DirectSoulLinkUiUpdater
         }
     }
 
-    private static bool IsSamePokemon(
-        PokemonCardViewModel local,
-        NetworkPokemonSnapshot remote)
-    {
-        return (local.Level <= 0 || remote.Level == local.Level) &&
-               IsSamePokemonIgnoringLevel(local, remote);
-    }
-
-    private static bool IsSamePokemonIgnoringLevel(
-        PokemonCardViewModel local,
-        NetworkPokemonSnapshot remote)
-    {
-        var localDisplay = Normalize(local.DisplayName);
-        var localSpecies = Normalize(local.Species);
-        var remoteDisplay = Normalize(remote.DisplayName);
-        var remoteSpecies = Normalize(remote.SpeciesName);
-
-        return localDisplay == remoteDisplay ||
-               localDisplay == remoteSpecies ||
-               localSpecies == remoteSpecies ||
-               localSpecies == remoteDisplay;
-    }
-
-    private static string DisplayName(NetworkPokemonSnapshot pokemon) =>
-        string.IsNullOrWhiteSpace(pokemon.DisplayName)
-            ? pokemon.SpeciesName
-            : pokemon.DisplayName;
-
-    private static string NormalizeLocation(string value)
-    {
-        var normalized = Normalize(value);
-        return normalized switch
-        {
-            "starter" or "newborkia" or "newbarktown" => "starter",
-            _ => normalized
-        };
-    }
-
-    private static string Normalize(string value) => new(value
-        .Trim()
-        .ToLowerInvariant()
-        .Where(char.IsLetterOrDigit)
-        .ToArray());
-
     private static async Task LoadSpriteAsync(PartnerView view, int speciesId)
     {
         try
@@ -659,10 +422,198 @@ internal static class DirectSoulLinkUiUpdater
         }
     }
 
+    private static bool IsPartyPokemonCard(Button card)
+    {
+        return card.GetVisualDescendants()
+            .OfType<TextBlock>()
+            .Any(text => text.Text?.StartsWith("📍", StringComparison.Ordinal) == true);
+    }
+
+    private static int GetPartyCardOrder(Button card) =>
+        Grid.GetRow(card) * 2 + Grid.GetColumn(card);
+
+    private static bool IsSamePokemon(
+        PokemonCardViewModel local,
+        NetworkPokemonSnapshot remote)
+    {
+        return (local.Level <= 0 || remote.Level == local.Level) &&
+               IsSamePokemonIgnoringLevel(local, remote);
+    }
+
+    private static bool IsSamePokemonIgnoringLevel(
+        PokemonCardViewModel local,
+        NetworkPokemonSnapshot remote)
+    {
+        var localDisplay = Normalize(local.DisplayName);
+        var localSpecies = Normalize(local.Species);
+        var remoteDisplay = Normalize(remote.DisplayName);
+        var remoteSpecies = Normalize(remote.SpeciesName);
+
+        return localDisplay == remoteDisplay ||
+               localDisplay == remoteSpecies ||
+               localSpecies == remoteSpecies ||
+               localSpecies == remoteDisplay;
+    }
+
+    private static void LogComparisons(
+        int localIndex,
+        PokemonCardViewModel local,
+        string localLocation,
+        IReadOnlyList<Candidate> available)
+    {
+        foreach (var candidate in available)
+        {
+            var remote = candidate.Pokemon;
+            var remoteLocation = NormalizeLocation(remote.Location);
+            SoulLinkDiagnosticLog.Write(
+                "COMPARE",
+                $"local#{localIndex} vs remote#{candidate.Index}: " +
+                $"localLocation='{local.Subtitle}', remoteLocation='{remote.Location}', " +
+                $"normalizedLocal='{localLocation}', normalizedRemote='{remoteLocation}', " +
+                $"LocationMatch={localLocation.Length > 0 && localLocation == remoteLocation}, " +
+                $"SpeciesMatch={IsSamePokemonIgnoringLevel(local, remote)}, " +
+                $"LevelMatch={local.Level <= 0 || local.Level == remote.Level}, " +
+                $"IdentityMatch={IsSamePokemon(local, remote)}.");
+        }
+    }
+
+    private static void LogState(
+        MainWindow window,
+        Grid partyPanel,
+        bool connected,
+        string remotePlayerName,
+        IReadOnlyList<PokemonCardViewModel> localParty,
+        IReadOnlyList<NetworkPokemonSnapshot> remoteParty,
+        IReadOnlyList<Button> allButtons,
+        IReadOnlyList<Button> cards)
+    {
+        SoulLinkDiagnosticLog.Write("BLOCK", new string('=', 72));
+        SoulLinkDiagnosticLog.Write(
+            "STATE",
+            $"window='{window.Title}' connected={connected} " +
+            $"remotePlayer='{remotePlayerName}' localParty={localParty.Count} " +
+            $"remoteParty={remoteParty.Count} allButtons={allButtons.Count} " +
+            $"partyCards={cards.Count}.");
+
+        for (var index = 0; index < remoteParty.Count; index++)
+        {
+            var pokemon = remoteParty[index];
+            SoulLinkDiagnosticLog.Write(
+                "REMOTE",
+                $"[{index}] display='{pokemon.DisplayName}' species='{pokemon.SpeciesName}' " +
+                $"speciesId={pokemon.SpeciesId} location='{pokemon.Location}' " +
+                $"normalizedLocation='{NormalizeLocation(pokemon.Location)}' " +
+                $"level={pokemon.Level} hp={pokemon.CurrentHp}/{pokemon.MaxHp}.");
+        }
+
+        for (var index = 0; index < localParty.Count; index++)
+        {
+            var pokemon = localParty[index];
+            SoulLinkDiagnosticLog.Write(
+                "LOCAL",
+                $"[{index}] display='{pokemon.DisplayName}' species='{pokemon.Species}' " +
+                $"speciesId={pokemon.SpeciesId} location='{pokemon.Subtitle}' " +
+                $"normalizedLocation='{NormalizeLocation(pokemon.Subtitle)}' " +
+                $"level={pokemon.Level} hp={pokemon.CurrentHp}/{pokemon.MaxHp}.");
+        }
+
+        if (!VisualTreeLogged.Contains(window))
+        {
+            VisualTreeLogged.Add(window);
+            SoulLinkDiagnosticLog.Write(
+                "VISUAL-TREE",
+                $"One-time party VisualTree for '{window.Title}':\n" +
+                BuildVisualTree(partyPanel));
+        }
+    }
+
+    private static string BuildVisualTree(Control root)
+    {
+        var builder = new System.Text.StringBuilder();
+        AppendVisual(root, builder, 0);
+        return builder.ToString();
+    }
+
+    private static void AppendVisual(
+        Control control,
+        System.Text.StringBuilder builder,
+        int depth)
+    {
+        builder.Append(' ', depth * 2)
+            .Append(control.GetType().Name)
+            .Append(" row=")
+            .Append(Grid.GetRow(control))
+            .Append(" col=")
+            .Append(Grid.GetColumn(control))
+            .Append(" visible=")
+            .Append(control.IsVisible)
+            .Append(" bounds=")
+            .Append(control.Bounds.Width.ToString("0.#"))
+            .Append('x')
+            .Append(control.Bounds.Height.ToString("0.#"));
+
+        if (control is TextBlock text && !string.IsNullOrWhiteSpace(text.Text))
+        {
+            builder.Append(" text='")
+                .Append(text.Text.Replace("\n", "\\n"))
+                .Append('\'');
+        }
+        else if (control is Button button)
+        {
+            builder.Append(" contentType='")
+                .Append(button.Content?.GetType().Name ?? "null")
+                .Append('\'');
+        }
+
+        builder.AppendLine();
+        foreach (var child in control.GetVisualChildren().OfType<Control>())
+        {
+            AppendVisual(child, builder, depth + 1);
+        }
+    }
+
+    private static string BuildSignature(
+        bool connected,
+        string remotePlayerName,
+        IReadOnlyList<PokemonCardViewModel> localParty,
+        IReadOnlyList<NetworkPokemonSnapshot> remoteParty,
+        int allButtonCount,
+        int cardCount)
+    {
+        var local = string.Join("|", localParty.Select(pokemon =>
+            $"{pokemon.SpeciesId}:{pokemon.Level}:{pokemon.CurrentHp}:" +
+            $"{NormalizeLocation(pokemon.Subtitle)}"));
+        var remote = string.Join("|", remoteParty.Select(pokemon =>
+            $"{pokemon.SpeciesId}:{pokemon.Level}:{pokemon.CurrentHp}:" +
+            $"{NormalizeLocation(pokemon.Location)}"));
+        return $"{connected}:{remotePlayerName}:{allButtonCount}:{cardCount}:" +
+               $"L={local}:R={remote}";
+    }
+
+    private static string DisplayName(NetworkPokemonSnapshot pokemon) =>
+        string.IsNullOrWhiteSpace(pokemon.DisplayName)
+            ? pokemon.SpeciesName
+            : pokemon.DisplayName;
+
+    private static string NormalizeLocation(string value)
+    {
+        var normalized = Normalize(value);
+        return normalized switch
+        {
+            "starter" or "newborkia" or "newbarktown" => "starter",
+            _ => normalized
+        };
+    }
+
+    private static string Normalize(string value) => new(value
+        .Trim()
+        .ToLowerInvariant()
+        .Where(char.IsLetterOrDigit)
+        .ToArray());
+
     private static void RemoveDetachedViews(IEnumerable<MainWindow> windows)
     {
-        var windowArray = windows.ToArray();
-        var liveCards = windowArray
+        var liveCards = windows
             .SelectMany(window =>
                 PartyPanelField?.GetValue(window) is Grid panel
                     ? panel.GetVisualDescendants()
@@ -674,14 +625,6 @@ internal static class DirectSoulLinkUiUpdater
         foreach (var card in Views.Keys.Where(card => !liveCards.Contains(card)).ToArray())
         {
             Views.Remove(card);
-        }
-
-        foreach (var window in LastDiagnosticSignatures.Keys
-                     .Where(window => !windowArray.Contains(window))
-                     .ToArray())
-        {
-            LastDiagnosticSignatures.Remove(window);
-            VisualTreeLogged.Remove(window);
         }
     }
 
@@ -702,40 +645,5 @@ internal static class DirectSoulLinkUiUpdater
         public TextBlock Name { get; } = name;
         public int SpeciesId { get; set; }
         public string Signature { get; set; } = string.Empty;
-    }
-}
-
-internal static class SoulLinkDiagnosticLog
-{
-    private static readonly object Sync = new();
-    private static readonly string LogPath = CreateLogPath();
-
-    public static void Write(string category, string message)
-    {
-        var line =
-            $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz}] " +
-            $"[SoulBuddy SoulLink] [{category}] {message}";
-
-        lock (Sync)
-        {
-            try
-            {
-                Console.WriteLine(line);
-                File.AppendAllText(LogPath, line + Environment.NewLine, Encoding.UTF8);
-            }
-            catch
-            {
-                // Diagnostics must never interrupt SoulBuddy.
-            }
-        }
-    }
-
-    private static string CreateLogPath()
-    {
-        var runtimeDirectory = Path.Combine(AppContext.BaseDirectory, "runtime");
-        Directory.CreateDirectory(runtimeDirectory);
-        return Path.Combine(
-            runtimeDirectory,
-            $"soullink-debug-{Environment.ProcessId}.log");
     }
 }
