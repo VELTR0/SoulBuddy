@@ -203,29 +203,14 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             : string.Join(", ", addresses.Select(address =>
                 $"{address}:{DefaultTcpPort}"));
 
-        string internetText;
-        try
-        {
-            var mapping = await _portMapper.TryCreateMappingAsync(
-                DefaultTcpPort,
-                cancellationToken);
-            _portMappingCreated = mapping.Success;
-            InternetAddress = mapping.ExternalAddress ?? string.Empty;
-            internetText = mapping.Success && !string.IsNullOrWhiteSpace(InternetAddress)
-                ? $"Internet: {InternetAddress}"
-                : "Internet: automatische Portfreigabe nicht verfügbar";
-        }
-        catch
-        {
-            InternetAddress = string.Empty;
-            internetText = "Internet: automatische Portfreigabe nicht verfügbar";
-        }
-
+        // LAN discovery must be available immediately. UPnP can take several
+        // seconds and must never delay local players from finding the host.
+        var discoveryTask = RunDiscoveryResponderAsync(cancellationToken);
         SetStatus(
-            $"Host aktiv · Warte auf Mitspieler · Lokal: {localAddressText} · {internetText}",
+            $"Host aktiv · Warte auf Mitspieler · Lokal: {localAddressText}",
             SoulBuddyNetworkState.Waiting);
 
-        var discoveryTask = RunDiscoveryResponderAsync(cancellationToken);
+        _ = TryPrepareInternetMappingAsync(localAddressText, cancellationToken);
 
         try
         {
@@ -254,6 +239,37 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
 
         await CompleteHandshakeAsync(_client, isHost: true, cancellationToken);
         await ReceiveMessagesAsync(cancellationToken);
+    }
+
+    private async Task TryPrepareInternetMappingAsync(
+        string localAddressText,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var mapping = await _portMapper.TryCreateMappingAsync(
+                DefaultTcpPort,
+                cancellationToken);
+            _portMappingCreated = mapping.Success;
+            InternetAddress = mapping.ExternalAddress ?? string.Empty;
+
+            if (State == SoulBuddyNetworkState.Waiting &&
+                mapping.Success &&
+                !string.IsNullOrWhiteSpace(InternetAddress))
+            {
+                SetStatus(
+                    $"Host aktiv · Warte auf Mitspieler · Lokal: {localAddressText} · Internet: {InternetAddress}",
+                    SoulBuddyNetworkState.Waiting);
+            }
+        }
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            InternetAddress = string.Empty;
+        }
     }
 
     private async Task RunDiscoveryResponderAsync(
@@ -354,7 +370,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
             var detail = failures.LastOrDefault()?.Message;
             throw new InvalidOperationException(
                 string.IsNullOrWhiteSpace(detail)
-                    ? "Kein Host gefunden. Prüfe die Session-ID und optional die Internet-Adresse."
+                    ? "Kein Host gefunden. Prüfe die Session-ID."
                     : $"Kein Host gefunden: {detail}");
         }
 
@@ -391,7 +407,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         {
             using var timeoutSource =
                 CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutSource.CancelAfter(TimeSpan.FromSeconds(8));
+            timeoutSource.CancelAfter(TimeSpan.FromSeconds(15));
             await client.ConnectAsync(
                 endpoint.Host,
                 endpoint.Port,
@@ -422,7 +438,7 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         }
 
         throw new InvalidOperationException(
-            "Die Internet-Adresse ist ungültig. Beispiel: 84.123.45.67:45831");
+            "Die Internet-Adresse ist ungültig.");
     }
 
     private async Task<DiscoveredHost> DiscoverHostAsync(
@@ -438,54 +454,64 @@ public sealed class SoulBuddyNetworkService : IAsyncDisposable
         };
         var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request);
 
-        await udp.SendAsync(
-            requestBytes,
-            new IPEndPoint(IPAddress.Broadcast, DiscoveryPort),
-            cancellationToken);
-        await udp.SendAsync(
-            requestBytes,
-            new IPEndPoint(IPAddress.Loopback, DiscoveryPort),
-            cancellationToken);
-
-        using var timeoutSource =
+        using var overallTimeout =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource.CancelAfter(TimeSpan.FromSeconds(8));
+        overallTimeout.CancelAfter(TimeSpan.FromSeconds(20));
 
-        while (true)
+        while (!overallTimeout.IsCancellationRequested)
         {
-            UdpReceiveResult received;
+            await udp.SendAsync(
+                requestBytes,
+                new IPEndPoint(IPAddress.Broadcast, DiscoveryPort),
+                overallTimeout.Token);
+            await udp.SendAsync(
+                requestBytes,
+                new IPEndPoint(IPAddress.Loopback, DiscoveryPort),
+                overallTimeout.Token);
+
+            using var receiveWindow =
+                CancellationTokenSource.CreateLinkedTokenSource(overallTimeout.Token);
+            receiveWindow.CancelAfter(TimeSpan.FromMilliseconds(900));
+
             try
             {
-                received = await udp.ReceiveAsync(timeoutSource.Token);
+                while (true)
+                {
+                    var received = await udp.ReceiveAsync(receiveWindow.Token);
+                    DiscoveryMessage? response;
+                    try
+                    {
+                        response = JsonSerializer.Deserialize<DiscoveryMessage>(received.Buffer);
+                    }
+                    catch (JsonException)
+                    {
+                        continue;
+                    }
+
+                    if (response is null ||
+                        response.Type != "host" ||
+                        response.ProtocolVersion != ProtocolVersion ||
+                        response.TcpPort <= 0 ||
+                        !string.Equals(response.SessionId, SessionId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    return new DiscoveredHost(
+                        received.RemoteEndPoint.Address,
+                        response.TcpPort);
+                }
             }
             catch (OperationCanceledException)
-                when (!cancellationToken.IsCancellationRequested)
+                when (!cancellationToken.IsCancellationRequested &&
+                      !overallTimeout.IsCancellationRequested)
             {
-                throw new InvalidOperationException(
-                    "Im lokalen Netzwerk wurde kein passender Host gefunden.");
+                // No answer in this short window. Broadcast again.
             }
-
-            DiscoveryMessage? response;
-            try
-            {
-                response = JsonSerializer.Deserialize<DiscoveryMessage>(received.Buffer);
-            }
-            catch (JsonException)
-            {
-                continue;
-            }
-
-            if (response is null ||
-                response.Type != "host" ||
-                response.ProtocolVersion != ProtocolVersion ||
-                response.TcpPort <= 0 ||
-                !string.Equals(response.SessionId, SessionId, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            return new DiscoveredHost(received.RemoteEndPoint.Address, response.TcpPort);
         }
+
+        throw new InvalidOperationException(
+            "Im lokalen Netzwerk wurde kein passender Host gefunden.");
     }
 
     private async Task CompleteHandshakeAsync(
