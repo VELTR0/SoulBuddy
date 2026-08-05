@@ -64,8 +64,13 @@ public sealed class SoullockeClient
         return result;
     }
 
-    public Task SaveRunAsync(Dictionary<string, SoullockeEncounter> encounters, CancellationToken cancellationToken) =>
-        SaveRunForPlayerAsync(_config.PlayerId, encounters, cancellationToken);
+    public async Task SaveRunAsync(
+        Dictionary<string, SoullockeEncounter> encounters,
+        CancellationToken cancellationToken)
+    {
+        await SaveRunForPlayerAsync(_config.PlayerId, encounters, cancellationToken);
+        await EnsureLinkedPartnerPlaceholdersAsync(encounters.Keys, cancellationToken);
+    }
 
     public async Task<bool> MarkLinkedPartnerBroFailedAsync(string location, CancellationToken cancellationToken)
     {
@@ -82,6 +87,74 @@ public sealed class SoullockeClient
         }
         Console.WriteLine($"[SOULLOCKE-HTTP] Kein Partner-Eintrag für Fangort '{location}' gefunden; Bro-Failed nicht gesetzt.");
         return false;
+    }
+
+    private async Task EnsureLinkedPartnerPlaceholdersAsync(
+        IEnumerable<string> localLocations,
+        CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        var mapping = _playerMapping ?? throw new InvalidOperationException("Die Soullocke-Spielerzuordnung wurde nicht initialisiert.");
+
+        if (!mapping.TryGetValue(_config.PlayerId, out var localPlayer))
+            throw new InvalidOperationException($"Soullocke-Spieler {_config.PlayerId} ist unbekannt.");
+
+        var runs = await LoadAllRunsAsync(cancellationToken);
+        var distinctLocations = localLocations
+            .Where(location => !string.IsNullOrWhiteSpace(location))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        foreach (var partner in mapping)
+        {
+            if (string.Equals(partner.Key, _config.PlayerId, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!string.Equals(partner.Value.TeamName, localPlayer.TeamName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!runs.TryGetValue(partner.Key, out var partnerRun))
+            {
+                Console.WriteLine(
+                    $"[SOULLOCKE-LINK] Partner-Run für '{partner.Value.PlayerName}'/{partner.Key} wurde nicht gefunden; " +
+                    "Platzhalter konnten nicht angelegt werden.");
+                continue;
+            }
+
+            var partnerChanged = false;
+            foreach (var location in distinctLocations)
+            {
+                var existingKey = partnerRun.Encounters.Keys.FirstOrDefault(
+                    key => string.Equals(key.Trim(), location.Trim(), StringComparison.OrdinalIgnoreCase));
+
+                if (existingKey is not null)
+                    continue;
+
+                partnerRun.Encounters[location] = new SoullockeEncounter
+                {
+                    Pokemon = 0,
+                    Nickname = null,
+                    Status = "notcaught"
+                };
+                partnerChanged = true;
+
+                Console.WriteLine(
+                    $"[SOULLOCKE-LINK] Partner-Platzhalter angelegt: Spieler='{partner.Value.PlayerName}'/{partner.Key}, " +
+                    $"Ort='{location}', Pokémon=#0, Status='notcaught'.");
+            }
+
+            if (!partnerChanged)
+            {
+                Console.WriteLine(
+                    $"[SOULLOCKE-LINK] Partner '{partner.Value.PlayerName}'/{partner.Key} besitzt bereits alle " +
+                    "benötigten Orts-Keys; kein Platzhalter-Save erforderlich.");
+                continue;
+            }
+
+            await SaveRunForPlayerAsync(partner.Key, partnerRun.Encounters, cancellationToken);
+            Console.WriteLine(
+                $"[SOULLOCKE-LINK] Partner-Platzhalter für '{partner.Value.PlayerName}'/{partner.Key} gespeichert.");
+        }
     }
 
     private async Task SaveRunForPlayerAsync(string playerId, Dictionary<string, SoullockeEncounter> encounters, CancellationToken cancellationToken)
