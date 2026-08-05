@@ -20,6 +20,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         HttpClient httpClient,
         LivePartySource livePartySource,
         PlayerLiveStateSource playerLiveStateSource,
+        NuzlockeRuleEventSource nuzlockeRuleEventSource,
         KnownPokemonStore knownPokemonStore,
         SyncService syncService,
         JsonLineCollectorEventSource collectorEventSource)
@@ -32,6 +33,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         _httpClient = httpClient;
         LivePartySource = livePartySource;
         PlayerLiveStateSource = playerLiveStateSource;
+        NuzlockeRuleEventSource = nuzlockeRuleEventSource;
         KnownPokemonStore = knownPokemonStore;
         SyncService = syncService;
         CollectorEventSource = collectorEventSource;
@@ -44,6 +46,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
     public string DatabasePath { get; }
     public LivePartySource LivePartySource { get; }
     public PlayerLiveStateSource PlayerLiveStateSource { get; }
+    public NuzlockeRuleEventSource NuzlockeRuleEventSource { get; }
     public KnownPokemonStore KnownPokemonStore { get; }
     public SyncService SyncService { get; }
     public JsonLineCollectorEventSource CollectorEventSource { get; }
@@ -113,6 +116,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         var playerLiveStateSource = new PlayerLiveStateSource();
         var knownPokemonStore = new KnownPokemonStore(databasePath);
         var locationMapper = new LocationMapper();
+        var nuzlockeRuleEventSource = new NuzlockeRuleEventSource(locationMapper);
         var soullockeClient = new SoullockeClient(httpClient, config);
         var syncService = new SyncService(
             livePartySource,
@@ -123,7 +127,8 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         var collectorEventSource = new JsonLineCollectorEventSource(
             eventFilePath,
             livePartySource,
-            playerLiveStateSource);
+            playerLiveStateSource,
+            nuzlockeRuleEventSource);
 
         var runtime = new SoulBuddyRuntime(
             config,
@@ -134,6 +139,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             httpClient,
             livePartySource,
             playerLiveStateSource,
+            nuzlockeRuleEventSource,
             knownPokemonStore,
             syncService,
             collectorEventSource);
