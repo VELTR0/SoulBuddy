@@ -69,6 +69,7 @@ public sealed class SoullockeClient
         CancellationToken cancellationToken)
     {
         await SaveRunForPlayerAsync(_config.PlayerId, encounters, cancellationToken);
+        await AlignLocalLocationKeysWithPartnerAsync(encounters, cancellationToken);
         await EnsureLinkedPartnerPlaceholdersAsync(encounters.Keys, cancellationToken);
     }
 
@@ -78,15 +79,76 @@ public sealed class SoullockeClient
         foreach (var pair in runs)
         {
             if (string.Equals(pair.Key, _config.PlayerId, StringComparison.OrdinalIgnoreCase)) continue;
-            if (!pair.Value.Encounters.TryGetValue(location, out var partnerEncounter)) continue;
+
+            var partnerKey = pair.Value.Encounters.Keys.FirstOrDefault(
+                key => NormalizeLinkedLocation(key) == NormalizeLinkedLocation(location));
+            if (partnerKey is null) continue;
+
+            var partnerEncounter = pair.Value.Encounters[partnerKey];
             if (string.Equals(partnerEncounter.Status, "brofailed", StringComparison.OrdinalIgnoreCase)) return false;
             partnerEncounter.Status = "brofailed";
             await SaveRunForPlayerAsync(pair.Key, pair.Value.Encounters, cancellationToken);
-            Console.WriteLine($"Soullocke: Partner-Begegnung „{location}“ einmalig auf Bro-Failed gesetzt.");
+            Console.WriteLine($"Soullocke: Partner-Begegnung „{partnerKey}“ einmalig auf Bro-Failed gesetzt.");
             return true;
         }
         Console.WriteLine($"[SOULLOCKE-HTTP] Kein Partner-Eintrag für Fangort '{location}' gefunden; Bro-Failed nicht gesetzt.");
         return false;
+    }
+
+    private async Task AlignLocalLocationKeysWithPartnerAsync(
+        Dictionary<string, SoullockeEncounter> localEncounters,
+        CancellationToken cancellationToken)
+    {
+        var runs = await LoadAllRunsAsync(cancellationToken);
+        var partnerRuns = runs
+            .Where(pair => !string.Equals(pair.Key, _config.PlayerId, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (partnerRuns.Length == 0)
+        {
+            Console.WriteLine("[SOULLOCKE-LINK] Kein weiterer Spieler gefunden; Orts-Key-Abgleich übersprungen.");
+            return;
+        }
+
+        var changed = false;
+        foreach (var localPair in localEncounters.ToArray())
+        {
+            var normalizedLocal = NormalizeLinkedLocation(localPair.Key);
+            var partnerKey = partnerRuns
+                .SelectMany(pair => pair.Value.Encounters.Keys)
+                .FirstOrDefault(key => NormalizeLinkedLocation(key) == normalizedLocal);
+
+            if (partnerKey is null || string.Equals(partnerKey, localPair.Key, StringComparison.Ordinal))
+                continue;
+
+            if (localEncounters.TryGetValue(partnerKey, out var existingAtPartnerKey))
+            {
+                if (existingAtPartnerKey.Pokemon > 0 && existingAtPartnerKey.Pokemon != localPair.Value.Pokemon)
+                {
+                    Console.WriteLine(
+                        $"[SOULLOCKE-LINK] Orts-Key '{localPair.Key}' konnte nicht zu '{partnerKey}' migriert werden, " +
+                        "weil dort bereits ein anderes Pokémon gespeichert ist.");
+                    continue;
+                }
+
+                localEncounters.Remove(partnerKey);
+            }
+
+            localEncounters.Remove(localPair.Key);
+            localEncounters[partnerKey] = localPair.Value;
+            changed = true;
+            Console.WriteLine(
+                $"[SOULLOCKE-LINK] Lokaler Orts-Key an Partner angepasst: '{localPair.Key}' → '{partnerKey}'.");
+        }
+
+        if (!changed)
+        {
+            Console.WriteLine("[SOULLOCKE-LINK] Lokale Orts-Keys stimmen bereits mit den Partner-Keys überein.");
+            return;
+        }
+
+        await SaveRunForPlayerAsync(_config.PlayerId, localEncounters, cancellationToken);
+        Console.WriteLine("[SOULLOCKE-LINK] Lokaler Run mit angeglichenen Partner-Orts-Keys gespeichert.");
     }
 
     private async Task EnsureLinkedPartnerPlaceholdersAsync(
@@ -95,10 +157,6 @@ public sealed class SoullockeClient
     {
         await EnsureInitializedAsync(cancellationToken);
         var mapping = _playerMapping ?? throw new InvalidOperationException("Die Soullocke-Spielerzuordnung wurde nicht initialisiert.");
-
-        if (!mapping.TryGetValue(_config.PlayerId, out var localPlayer))
-            throw new InvalidOperationException($"Soullocke-Spieler {_config.PlayerId} ist unbekannt.");
-
         var runs = await LoadAllRunsAsync(cancellationToken);
         var distinctLocations = localLocations
             .Where(location => !string.IsNullOrWhiteSpace(location))
@@ -108,9 +166,6 @@ public sealed class SoullockeClient
         foreach (var partner in mapping)
         {
             if (string.Equals(partner.Key, _config.PlayerId, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (!string.Equals(partner.Value.TeamName, localPlayer.TeamName, StringComparison.OrdinalIgnoreCase))
                 continue;
 
             if (!runs.TryGetValue(partner.Key, out var partnerRun))
@@ -125,7 +180,7 @@ public sealed class SoullockeClient
             foreach (var location in distinctLocations)
             {
                 var existingKey = partnerRun.Encounters.Keys.FirstOrDefault(
-                    key => string.Equals(key.Trim(), location.Trim(), StringComparison.OrdinalIgnoreCase));
+                    key => NormalizeLinkedLocation(key) == NormalizeLinkedLocation(location));
 
                 if (existingKey is not null)
                     continue;
@@ -294,6 +349,22 @@ public sealed class SoullockeClient
                     $"Status='{encounter.Value.Status}'.");
             }
         }
+    }
+
+    private static string NormalizeLinkedLocation(string location)
+    {
+        var normalized = new string(location
+            .Trim()
+            .ToLowerInvariant()
+            .Where(char.IsLetterOrDigit)
+            .ToArray());
+
+        return normalized switch
+        {
+            "darkcave" or "dunkelhöhle" or "dunkelhohle" => "darkcave",
+            "sprouttower" or "knofensaturm" => "sprouttower",
+            _ => normalized
+        };
     }
 
     private static string NormalizeSessionGameName(string? gameName)
