@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using SoulBuddy.Data;
 using SoulBuddy.Models;
 using SoulBuddy.Sources;
@@ -23,6 +24,10 @@ public sealed class SyncService
         _soullockeClient = soullockeClient;
         _locationMapper = locationMapper;
         _config = config;
+
+        Console.WriteLine(
+            $"[LIVE-PARTY-INSTANCE] SyncService verwendet {partySource.GetType().Name} " +
+            $"#{RuntimeHelpers.GetHashCode(partySource)}.");
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
@@ -107,7 +112,10 @@ public sealed class SyncService
             throw new InvalidOperationException("Der Soullocke-Startimport wurde noch nicht abgeschlossen.");
 
         var cycle = Interlocked.Increment(ref _syncCycle);
-        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SOULLOCKE-SYNC #{cycle}] Durchlauf gestartet; lokale Slots werden gelesen …");
+        Console.WriteLine(
+            $"[{DateTime.Now:HH:mm:ss}] [SOULLOCKE-SYNC #{cycle}] Durchlauf gestartet; " +
+            $"lokale Slots werden aus {_partySource.GetType().Name} " +
+            $"#{RuntimeHelpers.GetHashCode(_partySource)} gelesen …");
 
         using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         readTimeout.CancelAfter(TimeSpan.FromSeconds(5));
