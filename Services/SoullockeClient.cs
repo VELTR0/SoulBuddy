@@ -16,6 +16,12 @@ public sealed class SoullockeClient
     private readonly HttpClient _httpClient;
     private readonly AppConfig _config;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
+    private readonly Dictionary<string, string> _placeholderByInternalLocation =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Dunkelhöhle"] = "Placeholder 1",
+            ["Knofensaturm"] = "Placeholder 2"
+        };
 
     private Dictionary<string, PlayerMappingEntry>? _localPlayerMapping;
     private string _sessionGameName = string.Empty;
@@ -142,7 +148,7 @@ public sealed class SoullockeClient
             $"[SOULLOCKE-HTTP] SAVE OWN RUN START: Spieler='{localPlayer.PlayerName}'/" +
             $"{_config.PlayerId}, Begegnungen={apiEncounters.Count}: " +
             string.Join(", ", apiEncounters.Select(pair =>
-                $"'{(pair.Key.Length == 0 ? "<leer>" : pair.Key)}'=#{pair.Value.Pokemon}/{pair.Value.Status}")));
+                $"'{pair.Key}'=#{pair.Value.Pokemon}/{pair.Value.Status}")));
 
         using var response = await SendWithTimeoutAsync(
             token => _httpClient.PostAsJsonAsync(ApiBaseUrl + query, request, token),
@@ -166,44 +172,77 @@ public sealed class SoullockeClient
             $"{_config.PlayerId} wurde aktualisiert.");
     }
 
-    private static Dictionary<string, SoullockeEncounter> ConvertEncounterKeysForSoullocke(
+    private Dictionary<string, SoullockeEncounter> ConvertEncounterKeysForSoullocke(
         IReadOnlyDictionary<string, SoullockeEncounter> encounters)
     {
         var converted = new Dictionary<string, SoullockeEncounter>(StringComparer.OrdinalIgnoreCase);
+        var usedPlaceholders = new HashSet<string>(
+            _placeholderByInternalLocation.Values,
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var key in encounters.Keys)
+        {
+            var trimmed = key.Trim();
+            if (IsPlaceholder(trimmed))
+                usedPlaceholders.Add(trimmed);
+        }
 
         foreach (var pair in encounters)
         {
-            var apiLocation = pair.Key.Trim() switch
-            {
-                "Dunkelhöhle" or "Dark Cave" => "Finsterhöhle",
-                "Knofensaturm" or "Sprout Tower" => string.Empty,
-                _ => pair.Key.Trim()
-            };
+            var internalLocation = NormalizeInternalLocation(pair.Key);
+            var apiLocation = ResolveSoullockeLocation(
+                internalLocation,
+                usedPlaceholders);
 
             converted[apiLocation] = pair.Value;
 
-            if (!string.Equals(apiLocation, pair.Key, StringComparison.Ordinal))
+            if (!string.Equals(apiLocation, pair.Key.Trim(), StringComparison.Ordinal))
             {
                 Console.WriteLine(
                     $"[SOULLOCKE-LOCATION] '{pair.Key}' wird für Soullocke als " +
-                    $"'{(apiLocation.Length == 0 ? "<leer>" : apiLocation)}' gespeichert.");
+                    $"'{apiLocation}' gespeichert.");
             }
         }
 
         return converted;
     }
 
-    private static void NormalizeLoadedEncounterKeys(SoullockeRun run)
+    private string ResolveSoullockeLocation(
+        string internalLocation,
+        HashSet<string> usedPlaceholders)
+    {
+        if (IsDirectSoullockeLocation(internalLocation))
+            return internalLocation;
+
+        if (_placeholderByInternalLocation.TryGetValue(internalLocation, out var existing))
+        {
+            usedPlaceholders.Add(existing);
+            return existing;
+        }
+
+        for (var number = 3; number <= 9; number++)
+        {
+            var placeholder = $"Placeholder {number}";
+            if (!usedPlaceholders.Add(placeholder))
+                continue;
+
+            _placeholderByInternalLocation[internalLocation] = placeholder;
+            Console.WriteLine(
+                $"[SOULLOCKE-LOCATION] Nicht zuordenbarer Ort '{internalLocation}' erhält " +
+                $"dauerhaft für diese SoulBuddy-Sitzung '{placeholder}'.");
+            return placeholder;
+        }
+
+        throw new InvalidOperationException(
+            $"Für den nicht zuordenbaren Fangort '{internalLocation}' ist kein freier " +
+            "Soullocke-Platzhalter mehr verfügbar. Unterstützt werden Placeholder 1 bis 9.");
+    }
+
+    private void NormalizeLoadedEncounterKeys(SoullockeRun run)
     {
         foreach (var pair in run.Encounters.ToArray())
         {
-            var internalLocation = pair.Key.Trim() switch
-            {
-                "Finsterhöhle" or "Dark Cave" => "Dunkelhöhle",
-                "Sprout Tower" => "Knofensaturm",
-                "" => "Knofensaturm",
-                _ => pair.Key.Trim()
-            };
+            var internalLocation = ResolveInternalLocationFromSoullocke(pair.Key);
 
             if (string.Equals(pair.Key, internalLocation, StringComparison.Ordinal))
                 continue;
@@ -212,10 +251,55 @@ public sealed class SoullockeClient
             run.Encounters[internalLocation] = pair.Value;
 
             Console.WriteLine(
-                $"[SOULLOCKE-LOCATION] Geladener Soullocke-Ort " +
-                $"'{(pair.Key.Length == 0 ? "<leer>" : pair.Key)}' wird intern als " +
+                $"[SOULLOCKE-LOCATION] Geladener Soullocke-Ort '{pair.Key}' wird intern als " +
                 $"'{internalLocation}' verwendet.");
         }
+    }
+
+    private string ResolveInternalLocationFromSoullocke(string location)
+    {
+        var trimmed = location.Trim();
+        var knownInternal = _placeholderByInternalLocation
+            .FirstOrDefault(pair => string.Equals(
+                pair.Value,
+                trimmed,
+                StringComparison.OrdinalIgnoreCase))
+            .Key;
+
+        if (!string.IsNullOrWhiteSpace(knownInternal))
+            return knownInternal;
+
+        return NormalizeInternalLocation(trimmed);
+    }
+
+    private static string NormalizeInternalLocation(string location) =>
+        location.Trim() switch
+        {
+            "Finsterhöhle" or "Dark Cave" or "Placeholder 1" => "Dunkelhöhle",
+            "Sprout Tower" or "Placeholder 2" or "" => "Knofensaturm",
+            _ => location.Trim()
+        };
+
+    private static bool IsDirectSoullockeLocation(string location)
+    {
+        if (string.Equals(location, "Starter", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (IsPlaceholder(location))
+            return true;
+
+        if (!location.StartsWith("Route ", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return int.TryParse(location[6..], out _);
+    }
+
+    private static bool IsPlaceholder(string location)
+    {
+        if (!location.StartsWith("Placeholder ", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return int.TryParse(location[12..], out var number) && number is >= 1 and <= 9;
     }
 
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
