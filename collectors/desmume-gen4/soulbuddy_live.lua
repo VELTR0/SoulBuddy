@@ -1,6 +1,7 @@
--- Run this file in DeSmuME instead of auto_layout_gen4_gen5.lua.
--- Diagnostic and first testable HGSS live-encounter collector.
--- It only reads emulator memory and never writes to game memory.
+-- SoulBuddy HGSS live collector with integrated four-second event overlay.
+-- Load only this file in DeSmuME.
+-- It reads emulator state, sends party/box/live-battle data to SoulBuddy,
+-- and displays SoulBuddy rule events without writing to game memory.
 
 local json = require("dkjson")
 dofile "auto_layout_gen4_gen5.lua"
@@ -12,12 +13,20 @@ end
 
 local directory = string.match(source, "^(.*)[/\\]") or "."
 local event_path = directory .. "/../../runtime/emulator-events.jsonl"
+local overlay_event_path = directory .. "/../../runtime/overlay-events.jsonl"
 
 local original_send_slots = send_slots
 local party_cache = {}
 local last_console_signature = ""
 local last_console_time = 0
 local console_interval = 1.0
+
+-- Integrated overlay queue.
+local overlay_read_position = 0
+local overlay_read_position_initialized = false
+local overlay_queue = {}
+local active_overlay_message = nil
+local active_overlay_started_at = 0
 
 local function find_upvalue(func, wanted_name)
     if type(func) ~= "function" then return nil, nil end
@@ -331,8 +340,102 @@ function send_slots(slots_info, generation, selected_game, selected_subgame)
     return success
 end
 
+local function initialize_overlay_read_position()
+    if overlay_read_position_initialized then
+        return
+    end
+
+    local file = io.open(overlay_event_path, "r")
+    if file ~= nil then
+        overlay_read_position = file:seek("end") or 0
+        file:close()
+    else
+        overlay_read_position = 0
+    end
+
+    overlay_read_position_initialized = true
+end
+
+local function read_new_overlay_messages()
+    initialize_overlay_read_position()
+
+    local file = io.open(overlay_event_path, "r")
+    if file == nil then
+        return
+    end
+
+    local length = file:seek("end") or 0
+    if overlay_read_position > length then
+        overlay_read_position = 0
+    end
+
+    file:seek("set", overlay_read_position)
+
+    while true do
+        local line = file:read("*l")
+        if line == nil then
+            break
+        end
+
+        local decoded = json.decode(line)
+        if decoded ~= nil and decoded.message ~= nil and decoded.message ~= "" then
+            overlay_queue[#overlay_queue + 1] = {
+                message = tostring(decoded.message),
+                duration = tonumber(decoded.durationSeconds) or 4
+            }
+        end
+    end
+
+    overlay_read_position = file:seek() or length
+    file:close()
+end
+
+local function activate_next_overlay_message()
+    if active_overlay_message ~= nil or #overlay_queue == 0 then
+        return
+    end
+
+    active_overlay_message = table.remove(overlay_queue, 1)
+    active_overlay_started_at = os.time()
+end
+
+local function draw_overlay_messages()
+    read_new_overlay_messages()
+    activate_next_overlay_message()
+
+    if active_overlay_message == nil then
+        return
+    end
+
+    local elapsed = os.time() - active_overlay_started_at
+    if elapsed >= active_overlay_message.duration then
+        active_overlay_message = nil
+        activate_next_overlay_message()
+        if active_overlay_message == nil then
+            return
+        end
+    end
+
+    local text = "SoulBuddy: " .. active_overlay_message.message
+
+    -- Exact same position and style as the successful overlay test.
+    if gui.box ~= nil then
+        gui.box(28, 168, 228, 190, "black", "white")
+    end
+
+    gui.text(42, 176, text, "white", "black")
+end
+
+if gui ~= nil and gui.register ~= nil then
+    gui.register(draw_overlay_messages)
+elseif emu ~= nil and emu.registerafter ~= nil then
+    emu.registerafter(draw_overlay_messages)
+else
+    error("Diese DeSmuME-Version unterstützt weder gui.register noch emu.registerafter.")
+end
+
 print("============================================================")
-print("[SoulBuddy Live] HGSS live encounter collector v3 active.")
-print("[SoulBuddy Live] Wild encounters are now detected from mode 5.")
+print("[SoulBuddy Live] Collector und Event-Overlay aktiv.")
+print("[SoulBuddy Live] Party, Boxen, Kämpfe und Overlays laufen in einem Script.")
 print("[SoulBuddy Live] No game memory is written by this collector.")
 print("============================================================")
