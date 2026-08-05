@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using SoulBuddy.Data;
 using SoulBuddy.Models;
@@ -113,6 +114,11 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         var livePartySource = new LivePartySource(
             snapshotPartySource,
             initializeFromSnapshot: !config.SoullockeEnabled);
+
+        var livePartySourceInstanceId = RuntimeHelpers.GetHashCode(livePartySource);
+        Console.WriteLine(
+            $"[LIVE-PARTY-INSTANCE] Runtime erstellt LivePartySource #{livePartySourceInstanceId}. " +
+            $"Soullocke={config.SoullockeEnabled}, SnapshotInitialisierung={!config.SoullockeEnabled}.");
 
         var playerLiveStateSource = new PlayerLiveStateSource();
         var knownPokemonStore = new KnownPokemonStore(databasePath);
