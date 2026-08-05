@@ -14,6 +14,7 @@ public sealed class SyncService
     private readonly LocationMapper _locationMapper;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
     private bool _initialized;
+    private bool _firstLiveSnapshotPersisted;
     private long _syncCycle;
 
     public SyncService(IPartySource partySource, KnownPokemonStore knownPokemon,
@@ -46,7 +47,10 @@ public sealed class SyncService
             }
             _initialized = true;
         }
-        finally { _initializationLock.Release(); }
+        finally
+        {
+            _initializationLock.Release();
+        }
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -55,12 +59,19 @@ public sealed class SyncService
         Console.WriteLine($"SoulSync läuft. Polling-Intervall: {_config.PollIntervalMilliseconds} ms.");
         while (!cancellationToken.IsCancellationRequested)
         {
-            try { await SynchronizeOnceAsync(cancellationToken); }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+            try
+            {
+                await SynchronizeOnceAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SOULLOCKE-SYNC] Fehler: {ex}");
             }
+
             await Task.Delay(_config.PollIntervalMilliseconds, cancellationToken);
         }
     }
@@ -148,6 +159,7 @@ public sealed class SyncService
         var runChanged = false;
         var faintedLocations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var processedSpecies = new HashSet<int>();
+        var expectedRemoteEntries = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var validPokemonCount = 0;
 
         foreach (var slot in slots.OrderBy(slot => slot.Box is null ? 0 : 1).ThenBy(slot => slot.SlotId))
@@ -173,7 +185,6 @@ public sealed class SyncService
             }
 
             validPokemonCount++;
-
             if (!processedSpecies.Add(pokemon.Species))
             {
                 Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {source}: übersprungen, Spezies #{pokemon.Species} wurde bereits in diesem Durchlauf verarbeitet.");
@@ -209,15 +220,13 @@ public sealed class SyncService
             Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: lokal zusammengeführt unter ID '{mergedId}'.");
 
             if (run is null)
-            {
-                Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: kein Soullocke-Run verfügbar, nur lokal aktualisiert.");
                 continue;
-            }
 
             var matchingLocationKey = FindLocationKey(run.Encounters, location);
             var sameSpeciesPair = run.Encounters.FirstOrDefault(pair => pair.Value.Pokemon == pokemon.Species);
             var sameSpeciesKey = sameSpeciesPair.Value is null ? null : sameSpeciesPair.Key;
             var remoteKey = matchingLocationKey ?? sameSpeciesKey ?? location;
+            expectedRemoteEntries[remoteKey] = pokemon.Species;
 
             Console.WriteLine(
                 $"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Remote-Match Ort='{matchingLocationKey ?? "<keins>"}', " +
@@ -237,26 +246,16 @@ public sealed class SyncService
             var newStatus = oldStatus is "brofailed" or "notcaught" ? oldStatus : gameStatus;
             var nickname = string.IsNullOrWhiteSpace(pokemon.Nickname) ? null : pokemon.Nickname;
 
-            Console.WriteLine(
-                $"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Remote vorher Pokémon={encounter.Pokemon}, " +
-                $"Spitzname='{encounter.Nickname ?? "<leer>"}', Status='{oldStatus}'; " +
-                $"lokal Pokémon={pokemon.Species}, Spitzname='{nickname ?? "<leer>"}', Status='{gameStatus}'; Ergebnis='{newStatus}'.");
-
-            if (newStatus is "brofailed" or "notcaught")
-            {
-                await _knownPokemon.UpsertSoullockeEncounterAsync(
-                    mergedId, pokemon.Species, nickname, remoteKey, newStatus, cancellationToken);
-            }
-
             var speciesChanged = encounter.Pokemon != pokemon.Species;
             var nicknameChanged = !string.Equals(encounter.Nickname, nickname, StringComparison.Ordinal);
             var statusChanged = oldStatus != newStatus;
 
+            encounter.Pokemon = pokemon.Species;
+            encounter.Nickname = nickname;
+            encounter.Status = newStatus;
+
             if (speciesChanged || nicknameChanged || statusChanged)
             {
-                encounter.Pokemon = pokemon.Species;
-                encounter.Nickname = nickname;
-                encounter.Status = newStatus;
                 runChanged = true;
                 Console.WriteLine(
                     $"[SOULLOCKE-SYNC #{cycle}] VORGEMERKT {pokemon.SpeciesName}: " +
@@ -266,28 +265,71 @@ public sealed class SyncService
             }
             else
             {
-                Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Remote-Daten bereits identisch, kein Save erforderlich.");
+                Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Remote-Daten identisch; Eintrag bleibt Bestandteil des vollständigen Snapshots.");
+            }
+
+            if (newStatus is "brofailed" or "notcaught")
+            {
+                await _knownPokemon.UpsertSoullockeEncounterAsync(
+                    mergedId, pokemon.Species, nickname, remoteKey, newStatus, cancellationToken);
             }
 
             await _knownPokemon.MarkSoullockeSyncedAsync(mergedId, cancellationToken);
         }
 
+        var hasFreshCollectorData =
+            _partySource is LivePartySource livePartySource &&
+            livePartySource.HasReceivedLiveUpdate &&
+            processedSpecies.Count > 0;
+
+        var forceInitialLiveSave =
+            run is not null &&
+            hasFreshCollectorData &&
+            !_firstLiveSnapshotPersisted;
+
         Console.WriteLine(
             $"[SOULLOCKE-SYNC #{cycle}] Auswertung: gültige lokale Pokémon={validPokemonCount}, " +
-            $"eindeutige Spezies={processedSpecies.Count}, runChanged={runChanged}, Remote-Einträge danach={run?.Encounters.Count ?? 0}.");
+            $"eindeutige Spezies={processedSpecies.Count}, runChanged={runChanged}, " +
+            $"forceInitialLiveSave={forceInitialLiveSave}, Remote-Einträge danach={run?.Encounters.Count ?? 0}.");
 
-        if (run is not null && runChanged)
+        if (run is not null && (runChanged || forceInitialLiveSave))
         {
+            Console.WriteLine(
+                forceInitialLiveSave && !runChanged
+                    ? $"[SOULLOCKE-SYNC #{cycle}] Erzwinge vollständigen ersten Live-Snapshot, obwohl LOAD identische Daten gemeldet hat."
+                    : $"[SOULLOCKE-SYNC #{cycle}] Änderungen werden gespeichert.");
+
             Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] SAVE START: " +
                               string.Join(", ", run.Encounters.Select(pair => $"'{pair.Key}'=#{pair.Value.Pokemon}/{pair.Value.Status}")));
+
             await _soullockeClient.SaveRunAsync(run.Encounters, cancellationToken);
-            Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] SAVE ERFOLGREICH: {processedSpecies.Count} lokale Pokémon geprüft.");
+            var verifiedRun = await _soullockeClient.LoadRunAsync(cancellationToken);
+
+            var missingAfterSave = expectedRemoteEntries
+                .Where(expected =>
+                    !verifiedRun.Encounters.TryGetValue(expected.Key, out var saved) ||
+                    saved.Pokemon != expected.Value)
+                .Select(expected => $"'{expected.Key}'=#{expected.Value}")
+                .ToArray();
+
+            if (missingAfterSave.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    "Soullocke hat nach dem Save folgende lokale Begegnungen nicht bestätigt: " +
+                    string.Join(", ", missingAfterSave));
+            }
+
+            _firstLiveSnapshotPersisted = true;
+            Console.WriteLine(
+                $"[SOULLOCKE-SYNC #{cycle}] SAVE VERIFIZIERT: " +
+                $"{expectedRemoteEntries.Count} lokale Begegnungen wurden von Soullocke bestätigt.");
+
             foreach (var location in faintedLocations)
                 await _soullockeClient.MarkLinkedPartnerBroFailedAsync(location, cancellationToken);
         }
         else if (run is not null)
         {
-            Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] Kein Save ausgeführt, weil keine Änderung erkannt wurde.");
+            Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] Kein Save: noch keine frischen Collector-Daten oder Snapshot bereits persistiert.");
         }
     }
 
