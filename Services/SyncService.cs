@@ -47,7 +47,7 @@ public sealed class SyncService
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         await InitializeAsync(cancellationToken);
-        Console.WriteLine("SoulSync läuft.");
+        Console.WriteLine($"SoulSync läuft. Polling-Intervall: {_config.PollIntervalMilliseconds} ms.");
         while (!cancellationToken.IsCancellationRequested)
         {
             try { await SynchronizeOnceAsync(cancellationToken); }
@@ -107,8 +107,24 @@ public sealed class SyncService
             throw new InvalidOperationException("Der Soullocke-Startimport wurde noch nicht abgeschlossen.");
 
         var cycle = Interlocked.Increment(ref _syncCycle);
-        var slots = await _partySource.ReadAllPokemonAsync(cancellationToken);
-        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SOULLOCKE-SYNC #{cycle}] Start: {slots.Count} lokale Slots gelesen.");
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SOULLOCKE-SYNC #{cycle}] Durchlauf gestartet; lokale Slots werden gelesen …");
+
+        using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        readTimeout.CancelAfter(TimeSpan.FromSeconds(5));
+
+        IReadOnlyList<PartySlot> slots;
+        try
+        {
+            slots = await _partySource.ReadAllPokemonAsync(readTimeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                "LivePartySource.ReadAllPokemonAsync hat nach 5 Sekunden nicht geantwortet. " +
+                "Wahrscheinlich blockiert ein Party-/Box-Update den internen Lock.");
+        }
+
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SOULLOCKE-SYNC #{cycle}] Lokale Slots gelesen: {slots.Count}.");
 
         SoullockeRun? run = _config.SoullockeEnabled
             ? await _soullockeClient.LoadRunAsync(cancellationToken)
