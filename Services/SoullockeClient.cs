@@ -64,10 +64,6 @@ public sealed class SoullockeClient
             PlayerMapping = mapping
         };
 
-        Console.WriteLine(
-            $"[SOULLOCKE-HTTP] LOAD OWN RUN START: Session='{_config.SessionId}', " +
-            $"Spieler='{_config.PlayerName}'/{_config.PlayerId}, Run={_config.RunNumber}.");
-
         using var response = await SendWithTimeoutAsync(
             token => _httpClient.PostAsJsonAsync(
                 ApiBaseUrl + "game/batchLoadRuns",
@@ -77,10 +73,6 @@ public sealed class SoullockeClient
             cancellationToken);
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        Console.WriteLine(
-            $"[SOULLOCKE-HTTP] LOAD OWN RUN RESPONSE: HTTP {(int)response.StatusCode} " +
-            $"{response.ReasonPhrase}, BodyLength={body.Length}.");
-
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
@@ -91,12 +83,7 @@ public sealed class SoullockeClient
             ?? throw new InvalidOperationException("Soullocke hat ungültige Run-Daten zurückgegeben.");
 
         if (result.TryGetValue(_config.PlayerId, out var run))
-        {
             NormalizeLoadedEncounterKeys(run);
-            Console.WriteLine(
-                $"[SOULLOCKE-HTTP] LOAD OWN RUN OK: '{_config.PlayerName}'/{_config.PlayerId}=" +
-                $"{run.Encounters.Count} Begegnungen.");
-        }
 
         return result;
     }
@@ -111,9 +98,6 @@ public sealed class SoullockeClient
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Console.WriteLine(
-            $"[SOULLOCKE-SYNC] Partnerstatus für Ort '{location}' wird nicht geschrieben. " +
-            "SoulBuddy aktualisiert ausschließlich den eigenen Run.");
         return Task.FromResult(false);
     }
 
@@ -144,32 +128,18 @@ public sealed class SoullockeClient
             Encounters = apiEncounters
         };
 
-        Console.WriteLine(
-            $"[SOULLOCKE-HTTP] SAVE OWN RUN START: Spieler='{localPlayer.PlayerName}'/" +
-            $"{_config.PlayerId}, Begegnungen={apiEncounters.Count}: " +
-            string.Join(", ", apiEncounters.Select(pair =>
-                $"'{pair.Key}'=#{pair.Value.Pokemon}/{pair.Value.Status}")));
-
         using var response = await SendWithTimeoutAsync(
             token => _httpClient.PostAsJsonAsync(ApiBaseUrl + query, request, token),
             "eigenen Soullocke-Run speichern",
             cancellationToken);
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        Console.WriteLine(
-            $"[SOULLOCKE-HTTP] SAVE OWN RUN RESPONSE: HTTP {(int)response.StatusCode} " +
-            $"{response.ReasonPhrase}, Body='{Truncate(body, 800)}'.");
-
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
                 $"Soullocke konnte für den lokalen Spieler nicht gespeichert werden: " +
                 $"{(int)response.StatusCode} {body}");
         }
-
-        Console.WriteLine(
-            $"[SOULLOCKE-HTTP] SAVE OWN RUN OK: ausschließlich '{localPlayer.PlayerName}'/" +
-            $"{_config.PlayerId} wurde aktualisiert.");
     }
 
     private Dictionary<string, SoullockeEncounter> ConvertEncounterKeysForSoullocke(
@@ -190,18 +160,8 @@ public sealed class SoullockeClient
         foreach (var pair in encounters)
         {
             var internalLocation = NormalizeInternalLocation(pair.Key);
-            var apiLocation = ResolveSoullockeLocation(
-                internalLocation,
-                usedPlaceholders);
-
+            var apiLocation = ResolveSoullockeLocation(internalLocation, usedPlaceholders);
             converted[apiLocation] = pair.Value;
-
-            if (!string.Equals(apiLocation, pair.Key.Trim(), StringComparison.Ordinal))
-            {
-                Console.WriteLine(
-                    $"[SOULLOCKE-LOCATION] '{pair.Key}' wird für Soullocke als " +
-                    $"'{apiLocation}' gespeichert.");
-            }
         }
 
         return converted;
@@ -227,9 +187,6 @@ public sealed class SoullockeClient
                 continue;
 
             _placeholderByInternalLocation[internalLocation] = placeholder;
-            Console.WriteLine(
-                $"[SOULLOCKE-LOCATION] Nicht zuordenbarer Ort '{internalLocation}' erhält " +
-                $"dauerhaft für diese SoulBuddy-Sitzung '{placeholder}'.");
             return placeholder;
         }
 
@@ -243,16 +200,11 @@ public sealed class SoullockeClient
         foreach (var pair in run.Encounters.ToArray())
         {
             var internalLocation = ResolveInternalLocationFromSoullocke(pair.Key);
-
             if (string.Equals(pair.Key, internalLocation, StringComparison.Ordinal))
                 continue;
 
             run.Encounters.Remove(pair.Key);
             run.Encounters[internalLocation] = pair.Value;
-
-            Console.WriteLine(
-                $"[SOULLOCKE-LOCATION] Geladener Soullocke-Ort '{pair.Key}' wird intern als " +
-                $"'{internalLocation}' verwendet.");
         }
     }
 
@@ -266,10 +218,9 @@ public sealed class SoullockeClient
                 StringComparison.OrdinalIgnoreCase))
             .Key;
 
-        if (!string.IsNullOrWhiteSpace(knownInternal))
-            return knownInternal;
-
-        return NormalizeInternalLocation(trimmed);
+        return string.IsNullOrWhiteSpace(knownInternal)
+            ? NormalizeInternalLocation(trimmed)
+            : knownInternal;
     }
 
     private static string NormalizeInternalLocation(string location) =>
@@ -288,19 +239,14 @@ public sealed class SoullockeClient
         if (IsPlaceholder(location))
             return true;
 
-        if (!location.StartsWith("Route ", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return int.TryParse(location[6..], out _);
+        return location.StartsWith("Route ", StringComparison.OrdinalIgnoreCase) &&
+               int.TryParse(location[6..], out _);
     }
 
-    private static bool IsPlaceholder(string location)
-    {
-        if (!location.StartsWith("Placeholder ", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return int.TryParse(location[12..], out var number) && number is >= 1 and <= 9;
-    }
+    private static bool IsPlaceholder(string location) =>
+        location.StartsWith("Placeholder ", StringComparison.OrdinalIgnoreCase) &&
+        int.TryParse(location[12..], out var number) &&
+        number is >= 1 and <= 9;
 
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
     {
@@ -316,25 +262,11 @@ public sealed class SoullockeClient
             if (string.IsNullOrWhiteSpace(_config.SessionId))
                 throw new InvalidOperationException("Der Soullocke-Link enthält keine gültige Session-ID.");
 
-            Console.WriteLine("[SOULLOCKE-INIT] Lade Sitzungsdaten …");
             var session = await LoadSessionMetadataAsync(cancellationToken);
-            Console.WriteLine("[SOULLOCKE-INIT] Sitzungsdaten geladen.");
-
             _sessionGameName = NormalizeSessionGameName(session.Settings.Game);
             ResolvePlayerAssignmentByName(session);
-
-            Console.WriteLine(
-                $"[SOULLOCKE-INIT] Spielername eindeutig zugeordnet: " +
-                $"'{_config.PlayerName}' → {_config.PlayerId}. Authentifizierung läuft …");
-
             _config.AuthToken = await AuthenticateAsync(cancellationToken);
-            Console.WriteLine("[SOULLOCKE-INIT] Authentifizierung erfolgreich.");
-
             _initialized = true;
-            Console.WriteLine(
-                $"Soullocke eindeutig über Spielernamen zugeordnet: '{_config.PlayerName}' → " +
-                $"{_config.PlayerId}; Session-Spiel='{_sessionGameName}'. " +
-                "SoulBuddy schreibt ausschließlich diesen Spieler-Run.");
         }
         finally
         {
@@ -477,7 +409,4 @@ public sealed class SoullockeClient
             _ => normalized
         };
     }
-
-    private static string Truncate(string value, int maxLength) =>
-        value.Length <= maxLength ? value : value[..maxLength] + "…";
 }
