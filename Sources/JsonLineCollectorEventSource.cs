@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using SoulBuddy.Models;
 
@@ -24,11 +25,18 @@ public sealed class JsonLineCollectorEventSource
         _eventFilePath = eventFilePath;
         _partySource = partySource;
         _liveStateSource = liveStateSource;
+
+        Console.WriteLine(
+            $"[LIVE-PARTY-INSTANCE] Collector verwendet LivePartySource " +
+            $"#{RuntimeHelpers.GetHashCode(partySource)}.");
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         Console.WriteLine($"Collector-Ereignisse: {_eventFilePath}");
+        Console.WriteLine(
+            $"[LIVE-PARTY-INSTANCE] Collector-Loop arbeitet mit LivePartySource " +
+            $"#{RuntimeHelpers.GetHashCode(_partySource)}.");
         Console.WriteLine("Warte auf Nachrichten vom Emulator.");
 
         while (!cancellationToken.IsCancellationRequested)
@@ -153,11 +161,17 @@ public sealed class JsonLineCollectorEventSource
                 break;
 
             case "party-update":
+                Console.WriteLine(
+                    $"[LIVE-PARTY-INSTANCE] Party-Update wird auf LivePartySource " +
+                    $"#{RuntimeHelpers.GetHashCode(_partySource)} angewendet.");
                 await _partySource.ApplyUpdateAsync(collectorEvent.Slots, cancellationToken);
                 LogUpdate("Party", collectorEvent);
                 break;
 
             case "box-update":
+                Console.WriteLine(
+                    $"[LIVE-PARTY-INSTANCE] Box-Update wird auf LivePartySource " +
+                    $"#{RuntimeHelpers.GetHashCode(_partySource)} angewendet.");
                 await _partySource.ApplyBoxUpdateAsync(collectorEvent.Slots, cancellationToken);
                 LogUpdate("Box", collectorEvent);
                 break;
