@@ -38,12 +38,27 @@ public sealed class SoullockeClient
             Players = mapping.Keys.Select(id => new LoadRunPlayer { PlayerId = id, RunNumber = _config.RunNumber }).ToList(),
             PlayerMapping = mapping
         };
+
+        Console.WriteLine(
+            $"[SOULLOCKE-HTTP] LOAD START: Session='{_config.SessionId}', lokaler Spieler='{_config.PlayerName}'/" +
+            $"{_config.PlayerId}, Run={_config.RunNumber}, Spieler=[{string.Join(", ", mapping.Keys)}].");
+
         using var response = await _httpClient.PostAsJsonAsync(ApiBaseUrl + "game/batchLoadRuns", request, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        Console.WriteLine(
+            $"[SOULLOCKE-HTTP] LOAD RESPONSE: HTTP {(int)response.StatusCode} {response.ReasonPhrase}, " +
+            $"BodyLength={body.Length}.");
+
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException($"Soullocke konnte nicht geladen werden: {(int)response.StatusCode} {body}");
-        return JsonSerializer.Deserialize<BatchLoadResponse>(body, JsonOptions)?.PlayerData
+
+        var result = JsonSerializer.Deserialize<BatchLoadResponse>(body, JsonOptions)?.PlayerData
             ?? throw new InvalidOperationException("Soullocke hat ungültige Run-Daten zurückgegeben.");
+
+        Console.WriteLine(
+            $"[SOULLOCKE-HTTP] LOAD OK: " +
+            string.Join(", ", result.Select(pair => $"{pair.Key}={pair.Value.Encounters.Count} Begegnungen")));
+        return result;
     }
 
     public Task SaveRunAsync(Dictionary<string, SoullockeEncounter> encounters, CancellationToken cancellationToken) =>
@@ -62,6 +77,7 @@ public sealed class SoullockeClient
             Console.WriteLine($"Soullocke: Partner-Begegnung „{location}“ einmalig auf Bro-Failed gesetzt.");
             return true;
         }
+        Console.WriteLine($"[SOULLOCKE-HTTP] Kein Partner-Eintrag für Fangort '{location}' gefunden; Bro-Failed nicht gesetzt.");
         return false;
     }
 
@@ -75,9 +91,22 @@ public sealed class SoullockeClient
                     $"playerName={Uri.EscapeDataString(player.PlayerName)}&" +
                     $"authToken={Uri.EscapeDataString(_config.AuthToken)}";
         var request = new SaveRunRequest { PlayerId = playerId, RunNumber = _config.RunNumber, Encounters = encounters };
+
+        Console.WriteLine(
+            $"[SOULLOCKE-HTTP] SAVE START: Spieler='{player.PlayerName}'/{playerId}, Team='{player.TeamName}', " +
+            $"Run={_config.RunNumber}, Begegnungen={encounters.Count}: " +
+            string.Join(", ", encounters.Select(pair => $"'{pair.Key}'=#{pair.Value.Pokemon}/{pair.Value.Status}")));
+
         using var response = await _httpClient.PostAsJsonAsync(ApiBaseUrl + query, request, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode) throw new HttpRequestException($"Soullocke konnte nicht gespeichert werden: {(int)response.StatusCode} {body}");
+        Console.WriteLine(
+            $"[SOULLOCKE-HTTP] SAVE RESPONSE: HTTP {(int)response.StatusCode} {response.ReasonPhrase}, " +
+            $"BodyLength={body.Length}, Body='{Truncate(body, 800)}'.");
+
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"Soullocke konnte nicht gespeichert werden: {(int)response.StatusCode} {body}");
+
+        Console.WriteLine($"[SOULLOCKE-HTTP] SAVE OK für '{player.PlayerName}' mit {encounters.Count} Begegnungen.");
     }
 
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
@@ -139,4 +168,7 @@ public sealed class SoullockeClient
         if (result is null || !result.IsValid || string.IsNullOrWhiteSpace(result.AuthToken)) throw new InvalidOperationException("Das eingegebene Soullocke-Passwort ist ungültig.");
         return result.AuthToken;
     }
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength] + "…";
 }
