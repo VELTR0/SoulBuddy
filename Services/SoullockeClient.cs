@@ -69,7 +69,7 @@ public sealed class SoullockeClient
         CancellationToken cancellationToken)
     {
         await SaveRunForPlayerAsync(_config.PlayerId, encounters, cancellationToken);
-        await AlignLocalLocationKeysWithPartnerAsync(encounters, cancellationToken);
+        await AddPartnerLocationAliasesAsync(encounters, cancellationToken);
         await EnsureLinkedPartnerPlaceholdersAsync(encounters.Keys, cancellationToken);
     }
 
@@ -95,7 +95,7 @@ public sealed class SoullockeClient
         return false;
     }
 
-    private async Task AlignLocalLocationKeysWithPartnerAsync(
+    private async Task AddPartnerLocationAliasesAsync(
         Dictionary<string, SoullockeEncounter> localEncounters,
         CancellationToken cancellationToken)
     {
@@ -126,29 +126,31 @@ public sealed class SoullockeClient
                 if (existingAtPartnerKey.Pokemon > 0 && existingAtPartnerKey.Pokemon != localPair.Value.Pokemon)
                 {
                     Console.WriteLine(
-                        $"[SOULLOCKE-LINK] Orts-Key '{localPair.Key}' konnte nicht zu '{partnerKey}' migriert werden, " +
+                        $"[SOULLOCKE-LINK] Partner-Alias '{partnerKey}' konnte für '{localPair.Key}' nicht angelegt werden, " +
                         "weil dort bereits ein anderes Pokémon gespeichert ist.");
-                    continue;
                 }
-
-                localEncounters.Remove(partnerKey);
+                continue;
             }
 
-            localEncounters.Remove(localPair.Key);
-            localEncounters[partnerKey] = localPair.Value;
+            localEncounters[partnerKey] = new SoullockeEncounter
+            {
+                Pokemon = localPair.Value.Pokemon,
+                Nickname = localPair.Value.Nickname,
+                Status = localPair.Value.Status
+            };
             changed = true;
             Console.WriteLine(
-                $"[SOULLOCKE-LINK] Lokaler Orts-Key an Partner angepasst: '{localPair.Key}' → '{partnerKey}'.");
+                $"[SOULLOCKE-LINK] Partner-kompatibler Orts-Alias angelegt: '{localPair.Key}' + '{partnerKey}'.");
         }
 
         if (!changed)
         {
-            Console.WriteLine("[SOULLOCKE-LINK] Lokale Orts-Keys stimmen bereits mit den Partner-Keys überein.");
+            Console.WriteLine("[SOULLOCKE-LINK] Alle benötigten Partner-Orts-Aliase sind bereits vorhanden.");
             return;
         }
 
         await SaveRunForPlayerAsync(_config.PlayerId, localEncounters, cancellationToken);
-        Console.WriteLine("[SOULLOCKE-LINK] Lokaler Run mit angeglichenen Partner-Orts-Keys gespeichert.");
+        Console.WriteLine("[SOULLOCKE-LINK] Lokaler Run mit Partner-Orts-Alias gespeichert.");
     }
 
     private async Task EnsureLinkedPartnerPlaceholdersAsync(
