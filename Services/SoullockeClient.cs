@@ -70,7 +70,7 @@ public sealed class SoullockeClient
     {
         await SaveRunForPlayerAsync(_config.PlayerId, encounters, cancellationToken);
         await AddPartnerLocationAliasesAsync(encounters, cancellationToken);
-        await EnsureLinkedPartnerPlaceholdersAsync(encounters.Keys, cancellationToken);
+        await SynchronizeLinkedPartnerEncountersAsync(encounters, cancellationToken);
     }
 
     public async Task<bool> MarkLinkedPartnerBroFailedAsync(string location, CancellationToken cancellationToken)
@@ -132,12 +132,7 @@ public sealed class SoullockeClient
                 continue;
             }
 
-            localEncounters[partnerKey] = new SoullockeEncounter
-            {
-                Pokemon = localPair.Value.Pokemon,
-                Nickname = localPair.Value.Nickname,
-                Status = localPair.Value.Status
-            };
+            localEncounters[partnerKey] = CloneEncounter(localPair.Value);
             changed = true;
             Console.WriteLine(
                 $"[SOULLOCKE-LINK] Partner-kompatibler Orts-Alias angelegt: '{localPair.Key}' + '{partnerKey}'.");
@@ -153,17 +148,18 @@ public sealed class SoullockeClient
         Console.WriteLine("[SOULLOCKE-LINK] Lokaler Run mit Partner-Orts-Alias gespeichert.");
     }
 
-    private async Task EnsureLinkedPartnerPlaceholdersAsync(
-        IEnumerable<string> localLocations,
+    private async Task SynchronizeLinkedPartnerEncountersAsync(
+        IReadOnlyDictionary<string, SoullockeEncounter> localEncounters,
         CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         var mapping = _playerMapping ?? throw new InvalidOperationException("Die Soullocke-Spielerzuordnung wurde nicht initialisiert.");
         var runs = await LoadAllRunsAsync(cancellationToken);
-        var distinctLocations = localLocations
-            .Where(location => !string.IsNullOrWhiteSpace(location))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+
+        var localByLocation = localEncounters
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && pair.Value.Pokemon > 0)
+            .GroupBy(pair => NormalizeLinkedLocation(pair.Key), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 
         foreach (var partner in mapping)
         {
@@ -174,45 +170,73 @@ public sealed class SoullockeClient
             {
                 Console.WriteLine(
                     $"[SOULLOCKE-LINK] Partner-Run für '{partner.Value.PlayerName}'/{partner.Key} wurde nicht gefunden; " +
-                    "Platzhalter konnten nicht angelegt werden.");
+                    "Spiegelung konnte nicht durchgeführt werden.");
                 continue;
             }
 
             var partnerChanged = false;
-            foreach (var location in distinctLocations)
+            foreach (var localPair in localByLocation.Values)
             {
-                var existingKey = partnerRun.Encounters.Keys.FirstOrDefault(
-                    key => NormalizeLinkedLocation(key) == NormalizeLinkedLocation(location));
+                var normalizedLocation = NormalizeLinkedLocation(localPair.Key);
+                var partnerKey = partnerRun.Encounters.Keys.FirstOrDefault(
+                    key => NormalizeLinkedLocation(key) == normalizedLocation) ?? localPair.Key;
 
-                if (existingKey is not null)
+                if (!partnerRun.Encounters.TryGetValue(partnerKey, out var partnerEncounter))
+                {
+                    partnerRun.Encounters[partnerKey] = CloneEncounter(localPair.Value);
+                    partnerChanged = true;
+                    Console.WriteLine(
+                        $"[SOULLOCKE-LINK] Partner-Eintrag gespiegelt: Spieler='{partner.Value.PlayerName}'/{partner.Key}, " +
+                        $"Ort='{partnerKey}', Pokémon=#{localPair.Value.Pokemon}, Spitzname='{localPair.Value.Nickname ?? "<leer>"}', " +
+                        $"Status='{localPair.Value.Status}'.");
+                    continue;
+                }
+
+                var pokemonChanged = partnerEncounter.Pokemon != localPair.Value.Pokemon;
+                var nicknameChanged = !string.Equals(
+                    partnerEncounter.Nickname,
+                    localPair.Value.Nickname,
+                    StringComparison.Ordinal);
+                var statusChanged = !string.Equals(
+                    partnerEncounter.Status,
+                    localPair.Value.Status,
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (!pokemonChanged && !nicknameChanged && !statusChanged)
                     continue;
 
-                partnerRun.Encounters[location] = new SoullockeEncounter
-                {
-                    Pokemon = 0,
-                    Nickname = null,
-                    Status = "notcaught"
-                };
+                partnerEncounter.Pokemon = localPair.Value.Pokemon;
+                partnerEncounter.Nickname = localPair.Value.Nickname;
+                partnerEncounter.Status = localPair.Value.Status;
                 partnerChanged = true;
 
                 Console.WriteLine(
-                    $"[SOULLOCKE-LINK] Partner-Platzhalter angelegt: Spieler='{partner.Value.PlayerName}'/{partner.Key}, " +
-                    $"Ort='{location}', Pokémon=#0, Status='notcaught'.");
+                    $"[SOULLOCKE-LINK] Partner-Eintrag aktualisiert: Spieler='{partner.Value.PlayerName}'/{partner.Key}, " +
+                    $"Ort='{partnerKey}', Pokémon=#{localPair.Value.Pokemon}, Spitzname='{localPair.Value.Nickname ?? "<leer>"}', " +
+                    $"Status='{localPair.Value.Status}' " +
+                    $"(pokemonChanged={pokemonChanged}, nicknameChanged={nicknameChanged}, statusChanged={statusChanged}).");
             }
 
             if (!partnerChanged)
             {
                 Console.WriteLine(
-                    $"[SOULLOCKE-LINK] Partner '{partner.Value.PlayerName}'/{partner.Key} besitzt bereits alle " +
-                    "benötigten Orts-Keys; kein Platzhalter-Save erforderlich.");
+                    $"[SOULLOCKE-LINK] Partner '{partner.Value.PlayerName}'/{partner.Key} ist bereits vollständig " +
+                    "mit dem lokalen Savegame synchron.");
                 continue;
             }
 
             await SaveRunForPlayerAsync(partner.Key, partnerRun.Encounters, cancellationToken);
             Console.WriteLine(
-                $"[SOULLOCKE-LINK] Partner-Platzhalter für '{partner.Value.PlayerName}'/{partner.Key} gespeichert.");
+                $"[SOULLOCKE-LINK] Gespiegelte Begegnungen für '{partner.Value.PlayerName}'/{partner.Key} gespeichert.");
         }
     }
+
+    private static SoullockeEncounter CloneEncounter(SoullockeEncounter source) => new()
+    {
+        Pokemon = source.Pokemon,
+        Nickname = source.Nickname,
+        Status = source.Status
+    };
 
     private async Task SaveRunForPlayerAsync(string playerId, Dictionary<string, SoullockeEncounter> encounters, CancellationToken cancellationToken)
     {
