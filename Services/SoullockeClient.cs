@@ -85,16 +85,30 @@ public sealed class SoullockeClient
     {
         await EnsureInitializedAsync(cancellationToken);
         var mapping = _playerMapping ?? throw new InvalidOperationException("Die Soullocke-Spielerzuordnung wurde nicht initialisiert.");
-        if (!mapping.TryGetValue(playerId, out var player)) throw new InvalidOperationException($"Soullocke-Spieler {playerId} ist unbekannt.");
+        if (!mapping.TryGetValue(playerId, out var player))
+            throw new InvalidOperationException($"Soullocke-Spieler {playerId} ist unbekannt.");
+
+        var allRuns = await LoadAllRunsAsync(cancellationToken);
+        if (!allRuns.TryGetValue(playerId, out var currentRun))
+            throw new InvalidOperationException($"Der aktuelle Soullocke-Run für {player.PlayerName} ({playerId}) wurde vor dem Speichern nicht gefunden.");
+
         var query = $"game/saveRun?sessionId={Uri.EscapeDataString(_config.SessionId)}&" +
                     $"teamName={Uri.EscapeDataString(player.TeamName)}&" +
                     $"playerName={Uri.EscapeDataString(player.PlayerName)}&" +
                     $"authToken={Uri.EscapeDataString(_config.AuthToken)}";
-        var request = new SaveRunRequest { PlayerId = playerId, RunNumber = _config.RunNumber, Encounters = encounters };
+
+        var request = new SaveRunRequest
+        {
+            PlayerId = playerId,
+            RunNumber = currentRun.RunNumber > 0 ? currentRun.RunNumber : _config.RunNumber,
+            GameName = string.IsNullOrWhiteSpace(currentRun.GameName) ? "soulsilver" : currentRun.GameName,
+            Status = string.IsNullOrWhiteSpace(currentRun.Status) ? "active" : currentRun.Status,
+            Encounters = encounters
+        };
 
         Console.WriteLine(
             $"[SOULLOCKE-HTTP] SAVE START: Spieler='{player.PlayerName}'/{playerId}, Team='{player.TeamName}', " +
-            $"Run={_config.RunNumber}, Begegnungen={encounters.Count}: " +
+            $"Run={request.RunNumber}, Game='{request.GameName}', Status='{request.Status}', Begegnungen={encounters.Count}: " +
             string.Join(", ", encounters.Select(pair => $"'{pair.Key}'=#{pair.Value.Pokemon}/{pair.Value.Status}")));
 
         using var response = await _httpClient.PostAsJsonAsync(ApiBaseUrl + query, request, cancellationToken);
