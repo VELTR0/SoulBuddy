@@ -99,7 +99,11 @@ local function serializable_pokemon(pokemon)
         level = safe_value(data.level, 0),
         currentHp = safe_value(hp.current, 0),
         maxHp = safe_value(hp.max, 0),
-        pid = safe_value(data.pid, 0)
+        pid = safe_value(data.pid, 0),
+        originalTrainerId = safe_value(data.otid, 0),
+        originalTrainerSecretId = safe_value(data.otsid, 0),
+        locationMet = safe_value(data.locationMet, 0),
+        isShiny = safe_value(data.isShiny, false)
     }
 end
 
