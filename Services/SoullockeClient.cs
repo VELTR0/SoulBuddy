@@ -59,6 +59,8 @@ public sealed class SoullockeClient
         Console.WriteLine(
             $"[SOULLOCKE-HTTP] LOAD OK: " +
             string.Join(", ", result.Select(pair => $"{pair.Key}={pair.Value.Encounters.Count} Begegnungen")));
+
+        LogAllPlayerEncounters(result, mapping);
         return result;
     }
 
@@ -185,6 +187,40 @@ public sealed class SoullockeClient
         var result = JsonSerializer.Deserialize<SoullockePasswordValidationResponse>(body, JsonOptions);
         if (result is null || !result.IsValid || string.IsNullOrWhiteSpace(result.AuthToken)) throw new InvalidOperationException("Das eingegebene Soullocke-Passwort ist ungültig.");
         return result.AuthToken;
+    }
+
+    private static void LogAllPlayerEncounters(
+        IReadOnlyDictionary<string, SoullockeRun> runs,
+        IReadOnlyDictionary<string, PlayerMappingEntry> mapping)
+    {
+        Console.WriteLine("[SOULLOCKE-HTTP] VOLLSTÄNDIGE BEGEGNUNGSLISTEN ALLER SPIELER:");
+
+        foreach (var playerRun in runs.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            mapping.TryGetValue(playerRun.Key, out var player);
+            var playerName = player?.PlayerName ?? "<unbekannt>";
+            var teamName = player?.TeamName ?? "<unbekannt>";
+
+            Console.WriteLine(
+                $"[SOULLOCKE-HTTP] PLAYER {playerRun.Key}: Name='{playerName}', Team='{teamName}', " +
+                $"Run={playerRun.Value.RunNumber}, Game='{playerRun.Value.GameName}', Status='{playerRun.Value.Status}', " +
+                $"Begegnungen={playerRun.Value.Encounters.Count}.");
+
+            if (playerRun.Value.Encounters.Count == 0)
+            {
+                Console.WriteLine($"[SOULLOCKE-HTTP]   {playerRun.Key}: <keine Begegnungen>");
+                continue;
+            }
+
+            foreach (var encounter in playerRun.Value.Encounters.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                Console.WriteLine(
+                    $"[SOULLOCKE-HTTP]   {playerRun.Key}: Ort-Key='{encounter.Key}', " +
+                    $"Pokémon=#{encounter.Value.Pokemon}, " +
+                    $"Spitzname='{encounter.Value.Nickname ?? "<leer>"}', " +
+                    $"Status='{encounter.Value.Status}'.");
+            }
+        }
     }
 
     private static string NormalizeSessionGameName(string? gameName)
