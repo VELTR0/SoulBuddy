@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using SoulBuddy.Data;
 using SoulBuddy.Models;
@@ -107,18 +106,9 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         var databasePath = Path.Combine(configDirectory, "soulbuddy.db");
         var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         var snapshotPartySource = new JsonPartySource(partyJsonPath);
-
-        // In Soullocke mode an old party.json must never win during startup.
-        // The live party therefore starts empty and accepts local data only
-        // after a new collector event arrives during this application run.
         var livePartySource = new LivePartySource(
             snapshotPartySource,
             initializeFromSnapshot: !config.SoullockeEnabled);
-
-        var livePartySourceInstanceId = RuntimeHelpers.GetHashCode(livePartySource);
-        Console.WriteLine(
-            $"[LIVE-PARTY-INSTANCE] Runtime erstellt LivePartySource #{livePartySourceInstanceId}. " +
-            $"Soullocke={config.SoullockeEnabled}, SnapshotInitialisierung={!config.SoullockeEnabled}.");
 
         var playerLiveStateSource = new PlayerLiveStateSource();
         var knownPokemonStore = new KnownPokemonStore(databasePath);
@@ -148,11 +138,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             syncService,
             collectorEventSource);
 
-        // Complete the initial Soullocke -> SoulBuddy pull before this runtime
-        // is returned to the UI. Consequently neither the collector loop nor
-        // the SoulBuddy -> Soullocke upload loop can race the initial import.
         await runtime.SyncService.InitializeAsync(cancellationToken);
-
         return runtime;
     }
 
@@ -168,18 +154,14 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         {
             var projectDirectory = FindProjectDirectory(searchRoot);
             if (projectDirectory is not null)
-            {
                 return projectDirectory;
-            }
         }
 
         foreach (var searchRoot in searchRoots.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var configDirectory = FindDirectoryContainingFile(searchRoot, "appsettings.json");
             if (configDirectory is not null)
-            {
                 return configDirectory;
-            }
         }
 
         throw new FileNotFoundException(
@@ -194,11 +176,11 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             var configPath = Path.Combine(directory.FullName, "appsettings.json");
             var collectorPath = Path.Combine(directory.FullName, "collectors", "desmume-gen4");
             if (File.Exists(configPath) && Directory.Exists(collectorPath))
-            {
                 return directory.FullName;
-            }
+
             directory = directory.Parent;
         }
+
         return null;
     }
 
@@ -208,20 +190,19 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         while (directory is not null)
         {
             if (File.Exists(Path.Combine(directory.FullName, fileName)))
-            {
                 return directory.FullName;
-            }
+
             directory = directory.Parent;
         }
+
         return null;
     }
 
     public void Start()
     {
         if (_backgroundTask is not null)
-        {
             return;
-        }
+
         _backgroundTask = RunBackgroundAsync(_cancellationSource.Token);
     }
 
@@ -233,8 +214,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
                 SyncService.RunAsync(cancellationToken),
                 CollectorEventSource.RunAsync(cancellationToken));
         }
-        catch (OperationCanceledException)
-            when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
     }
@@ -252,6 +232,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             {
             }
         }
+
         _cancellationSource.Dispose();
         _httpClient.Dispose();
     }
