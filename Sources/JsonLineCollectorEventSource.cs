@@ -8,6 +8,7 @@ public sealed class JsonLineCollectorEventSource
     private readonly string _eventFilePath;
     private readonly LivePartySource _partySource;
     private readonly PlayerLiveStateSource _liveStateSource;
+    private readonly NuzlockeRuleEventSource _ruleEventSource;
     private long _readPosition;
     private bool _readPositionInitialized;
 
@@ -19,11 +20,13 @@ public sealed class JsonLineCollectorEventSource
     public JsonLineCollectorEventSource(
         string eventFilePath,
         LivePartySource partySource,
-        PlayerLiveStateSource liveStateSource)
+        PlayerLiveStateSource liveStateSource,
+        NuzlockeRuleEventSource ruleEventSource)
     {
         _eventFilePath = eventFilePath;
         _partySource = partySource;
         _liveStateSource = liveStateSource;
+        _ruleEventSource = ruleEventSource;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -136,14 +139,17 @@ public sealed class JsonLineCollectorEventSource
                 break;
 
             case "party-update":
+                _ruleEventSource.ObservePokemonUpdate(collectorEvent.Slots);
                 await _partySource.ApplyUpdateAsync(collectorEvent.Slots, cancellationToken);
                 break;
 
             case "box-update":
+                _ruleEventSource.ObservePokemonUpdate(collectorEvent.Slots);
                 await _partySource.ApplyBoxUpdateAsync(collectorEvent.Slots, cancellationToken);
                 break;
 
             case "player-state" when collectorEvent.State is not null:
+                _ruleEventSource.ObservePlayerState(collectorEvent.State);
                 _liveStateSource.Apply(collectorEvent.State);
                 break;
         }
