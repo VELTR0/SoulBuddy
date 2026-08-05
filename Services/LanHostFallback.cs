@@ -52,7 +52,6 @@ internal static class LanHostFallback
         try
         {
             var candidates = GetCandidateAddresses();
-            Log($"Scanning {candidates.Count} LAN addresses for TCP {SoulBuddyNetworkService.DefaultTcpPort}.");
             using var scanSource = new CancellationTokenSource(TimeSpan.FromSeconds(6));
             using var gate = new SemaphoreSlim(32, 32);
             var foundSource = new TaskCompletionSource<IPAddress?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -69,26 +68,43 @@ internal static class LanHostFallback
                     await client.ConnectAsync(address, SoulBuddyNetworkService.DefaultTcpPort, timeout.Token);
                     foundSource.TrySetResult(address);
                 }
-                catch { }
-                finally { gate.Release(); }
+                catch
+                {
+                }
+                finally
+                {
+                    gate.Release();
+                }
             }).ToArray();
 
-            await Task.WhenAny(foundSource.Task, Task.WhenAll(tasks), Task.Delay(TimeSpan.FromSeconds(6), scanSource.Token));
+            await Task.WhenAny(
+                foundSource.Task,
+                Task.WhenAll(tasks),
+                Task.Delay(TimeSpan.FromSeconds(6), scanSource.Token));
+
             var found = foundSource.Task.IsCompletedSuccessfully ? foundSource.Task.Result : null;
             if (found is null)
+                return;
+
+            if (service.Mode != SoulBuddyNetworkMode.Join ||
+                service.State == SoulBuddyNetworkState.Connected)
             {
-                Log("No SoulBuddy TCP host found in the local subnet.");
                 return;
             }
 
-            if (service.Mode != SoulBuddyNetworkMode.Join || service.State == SoulBuddyNetworkState.Connected) return;
             var endpoint = $"{found}:{SoulBuddyNetworkService.DefaultTcpPort}";
-            Log($"Found possible host at {endpoint}; switching join to direct LAN connection.");
             service.PrepareJoin(service.SessionId, service.PlayerName, endpoint);
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { Log($"Scan failed: {ex.GetType().Name}: {ex.Message}"); }
-        finally { _scanRunning = false; }
+        catch (OperationCanceledException)
+        {
+        }
+        catch
+        {
+        }
+        finally
+        {
+            _scanRunning = false;
+        }
     }
 
     private static IReadOnlyList<IPAddress> GetCandidateAddresses()
@@ -96,12 +112,23 @@ internal static class LanHostFallback
         var result = new HashSet<IPAddress>();
         foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
         {
-            if (nic.OperationalStatus != OperationalStatus.Up || nic.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+            if (nic.OperationalStatus != OperationalStatus.Up ||
+                nic.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+            {
+                continue;
+            }
+
             foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
             {
                 var address = unicast.Address;
                 var mask = unicast.IPv4Mask;
-                if (address.AddressFamily != AddressFamily.InterNetwork || mask is null || IPAddress.IsLoopback(address)) continue;
+                if (address.AddressFamily != AddressFamily.InterNetwork ||
+                    mask is null ||
+                    IPAddress.IsLoopback(address))
+                {
+                    continue;
+                }
+
                 var a = address.GetAddressBytes();
                 var m = mask.GetAddressBytes();
                 var networkBytes = new byte[4];
@@ -111,6 +138,7 @@ internal static class LanHostFallback
                     networkBytes[i] = (byte)(a[i] & m[i]);
                     broadcastBytes[i] = (byte)(networkBytes[i] | ~m[i]);
                 }
+
                 var network = ToUInt32(networkBytes);
                 var broadcast = ToUInt32(broadcastBytes);
                 var own = ToUInt32(a);
@@ -119,14 +147,21 @@ internal static class LanHostFallback
                     network = own & 0xFFFFFF00u;
                     broadcast = network | 0xFFu;
                 }
+
                 for (var value = network + 1; value < broadcast; value++)
-                    if (value != own) result.Add(FromUInt32(value));
+                {
+                    if (value != own)
+                        result.Add(FromUInt32(value));
+                }
             }
         }
+
         return result.ToArray();
     }
 
-    private static uint ToUInt32(byte[] b) => ((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3];
-    private static IPAddress FromUInt32(uint v) => new(new byte[] { (byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v });
-    private static void Log(string message) => Console.WriteLine($"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz}] [SoulBuddy Net] [LAN-SCAN] {message}");
+    private static uint ToUInt32(byte[] b) =>
+        ((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3];
+
+    private static IPAddress FromUInt32(uint v) =>
+        new(new byte[] { (byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v });
 }
