@@ -106,6 +106,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         Directory.CreateDirectory(runtimeDirectory);
 
         var eventFilePath = Path.Combine(runtimeDirectory, "emulator-events.jsonl");
+        var overlayEventFilePath = Path.Combine(runtimeDirectory, "overlay-events.jsonl");
         var databasePath = Path.Combine(configDirectory, "soulbuddy.db");
         var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         var snapshotPartySource = new JsonPartySource(partyJsonPath);
@@ -117,6 +118,10 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         var knownPokemonStore = new KnownPokemonStore(databasePath);
         var locationMapper = new LocationMapper();
         var nuzlockeRuleEventSource = new NuzlockeRuleEventSource(locationMapper);
+        var overlayMessageWriter = new OverlayMessageWriter(overlayEventFilePath);
+        nuzlockeRuleEventSource.EventOccurred += (_, ruleEvent) =>
+            overlayMessageWriter.Write(ruleEvent);
+
         var soullockeClient = new SoullockeClient(httpClient, config);
         var syncService = new SyncService(
             livePartySource,
