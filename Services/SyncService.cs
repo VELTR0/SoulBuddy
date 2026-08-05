@@ -107,11 +107,12 @@ public sealed class SyncService
                 continue;
             }
 
+            var displayLocation = ToDisplayLocation(pair.Key);
             await _knownPokemon.UpsertSoullockeEncounterAsync(
                 $"soullocke:{_config.PlayerId}:{pair.Key}",
                 pair.Value.Pokemon,
                 pair.Value.Nickname,
-                pair.Key,
+                displayLocation,
                 NormalizeStatus(pair.Value.Status),
                 cancellationToken);
         }
@@ -192,10 +193,11 @@ public sealed class SyncService
             }
 
             var mappedLocation = _locationMapper.GetLocationName(pokemon.LocationMet);
-            var location = mappedLocation ?? $"Unbekannter Fangort ({pokemon.LocationMet})";
+            var displayLocation = mappedLocation ?? $"Unbekannter Fangort ({pokemon.LocationMet})";
+            var remoteLocation = GetSoullockeLocationKey(pokemon.LocationMet, displayLocation);
             Console.WriteLine(
                 $"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Fangort-ID {pokemon.LocationMet} => " +
-                $"Mapper='{mappedLocation ?? "<kein Treffer>"}', verwendet='{location}', normalisiert='{NormalizeLocation(location)}'.");
+                $"Anzeige='{displayLocation}', Soullocke-Key='{remoteLocation}', normalisiert='{NormalizeLocation(remoteLocation)}'.");
 
             var gameEntry = new KnownPokemonEntry
             {
@@ -206,7 +208,7 @@ public sealed class SyncService
                 Pid = pokemon.Pid,
                 OriginalTrainerId = pokemon.OriginalTrainerId,
                 OriginalTrainerSecretId = pokemon.OriginalTrainerSecretId,
-                Location = location,
+                Location = displayLocation,
                 LocationId = pokemon.LocationMet,
                 LevelMet = pokemon.LevelMet,
                 CurrentLevel = pokemon.Level,
@@ -222,20 +224,35 @@ public sealed class SyncService
             if (run is null)
                 continue;
 
-            var matchingLocationKey = FindLocationKey(run.Encounters, location);
+            var canonicalLocationKey = FindLocationKey(run.Encounters, remoteLocation);
             var sameSpeciesPair = run.Encounters.FirstOrDefault(pair => pair.Value.Pokemon == pokemon.Species);
             var sameSpeciesKey = sameSpeciesPair.Value is null ? null : sameSpeciesPair.Key;
-            var remoteKey = matchingLocationKey ?? sameSpeciesKey ?? location;
+            var remoteKey = canonicalLocationKey ?? remoteLocation;
+
+            if (canonicalLocationKey is null && sameSpeciesKey is not null &&
+                NormalizeLocation(sameSpeciesKey) != NormalizeLocation(remoteLocation))
+            {
+                var existingEncounter = run.Encounters[sameSpeciesKey];
+                run.Encounters.Remove(sameSpeciesKey);
+                run.Encounters[remoteLocation] = existingEncounter;
+                remoteKey = remoteLocation;
+                runChanged = true;
+                Console.WriteLine(
+                    $"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: veralteter Orts-Key " +
+                    $"'{sameSpeciesKey}' wurde zu '{remoteLocation}' migriert.");
+            }
+
             expectedRemoteEntries[remoteKey] = pokemon.Species;
 
             Console.WriteLine(
-                $"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Remote-Match Ort='{matchingLocationKey ?? "<keins>"}', " +
+                $"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Remote-Match Ort='{canonicalLocationKey ?? "<keins>"}', " +
                 $"Spezies='{sameSpeciesKey ?? "<keins>"}', Ziel-Key='{remoteKey}'.");
 
             if (!run.Encounters.TryGetValue(remoteKey, out var encounter))
             {
                 encounter = new SoullockeEncounter();
                 run.Encounters[remoteKey] = encounter;
+                runChanged = true;
                 Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: neuer Remote-Eintrag unter '{remoteKey}' angelegt.");
             }
 
@@ -271,7 +288,7 @@ public sealed class SyncService
             if (newStatus is "brofailed" or "notcaught")
             {
                 await _knownPokemon.UpsertSoullockeEncounterAsync(
-                    mergedId, pokemon.Species, nickname, remoteKey, newStatus, cancellationToken);
+                    mergedId, pokemon.Species, nickname, displayLocation, newStatus, cancellationToken);
             }
 
             await _knownPokemon.MarkSoullockeSyncedAsync(mergedId, cancellationToken);
@@ -332,6 +349,20 @@ public sealed class SyncService
             Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] Kein Save: noch keine frischen Collector-Daten oder Snapshot bereits persistiert.");
         }
     }
+
+    private static string GetSoullockeLocationKey(int locationId, string displayLocation) => locationId switch
+    {
+        204 => "Sprout Tower",
+        220 => "Dark Cave",
+        _ => displayLocation
+    };
+
+    private static string ToDisplayLocation(string remoteLocation) => remoteLocation.Trim() switch
+    {
+        "Sprout Tower" => "Knofensaturm",
+        "Dark Cave" => "Dunkelhöhle",
+        _ => remoteLocation
+    };
 
     private static string? FindLocationKey(
         IReadOnlyDictionary<string, SoullockeEncounter> encounters,
