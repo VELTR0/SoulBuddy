@@ -13,6 +13,7 @@ public sealed class SyncService
     private readonly LocationMapper _locationMapper;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
     private bool _initialized;
+    private long _syncCycle;
 
     public SyncService(IPartySource partySource, KnownPokemonStore knownPokemon,
         SoullockeClient soullockeClient, LocationMapper locationMapper, AppConfig config)
@@ -51,7 +52,10 @@ public sealed class SyncService
         {
             try { await SynchronizeOnceAsync(cancellationToken); }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
-            catch (Exception ex) { Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Fehler: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SOULLOCKE-SYNC] Fehler: {ex}");
+            }
             await Task.Delay(_config.PollIntervalMilliseconds, cancellationToken);
         }
     }
@@ -59,19 +63,34 @@ public sealed class SyncService
     private async Task ImportSoullockeRunAsync(CancellationToken cancellationToken)
     {
         var run = await _soullockeClient.LoadRunAsync(cancellationToken);
+        Console.WriteLine($"[SOULLOCKE-IMPORT] Remote-Run enthält {run.Encounters.Count} Begegnungen.");
+        foreach (var pair in run.Encounters)
+        {
+            Console.WriteLine(
+                $"[SOULLOCKE-IMPORT] Ort='{pair.Key}', Pokémon={pair.Value.Pokemon}, " +
+                $"Spitzname='{pair.Value.Nickname ?? "<leer>"}', Status='{pair.Value.Status}'.");
+        }
         await PullRemoteEncountersAsync(run, cancellationToken);
         Console.WriteLine($"Soullocke-Initialisierung: {run.Encounters.Count} Begegnungen mit Status gelesen.");
     }
 
     private async Task PullRemoteEncountersAsync(SoullockeRun run, CancellationToken cancellationToken)
     {
-        // If Soullocke itself contains the same species more than once, keep
-        // the first encounter only. SoulBuddy's model deliberately exposes one
-        // encounter per Pokémon species.
         var importedSpecies = new HashSet<int>();
         foreach (var pair in run.Encounters)
         {
-            if (pair.Value.Pokemon <= 0 || !importedSpecies.Add(pair.Value.Pokemon)) continue;
+            if (pair.Value.Pokemon <= 0)
+            {
+                Console.WriteLine($"[SOULLOCKE-PULL] Übersprungen: Ort='{pair.Key}' hat keine gültige Pokémon-ID ({pair.Value.Pokemon}).");
+                continue;
+            }
+
+            if (!importedSpecies.Add(pair.Value.Pokemon))
+            {
+                Console.WriteLine($"[SOULLOCKE-PULL] Übersprungen: Pokémon #{pair.Value.Pokemon} wurde im Remote-Run bereits verarbeitet (Ort='{pair.Key}').");
+                continue;
+            }
+
             await _knownPokemon.UpsertSoullockeEncounterAsync(
                 $"soullocke:{_config.PlayerId}:{pair.Key}",
                 pair.Value.Pokemon,
@@ -87,27 +106,62 @@ public sealed class SyncService
         if (!_initialized)
             throw new InvalidOperationException("Der Soullocke-Startimport wurde noch nicht abgeschlossen.");
 
+        var cycle = Interlocked.Increment(ref _syncCycle);
         var slots = await _partySource.ReadAllPokemonAsync(cancellationToken);
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SOULLOCKE-SYNC #{cycle}] Start: {slots.Count} lokale Slots gelesen.");
+
         SoullockeRun? run = _config.SoullockeEnabled
             ? await _soullockeClient.LoadRunAsync(cancellationToken)
             : null;
-        if (run is not null) await PullRemoteEncountersAsync(run, cancellationToken);
+
+        if (run is not null)
+        {
+            Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] Remote vor Merge: {run.Encounters.Count} Begegnungen: " +
+                              string.Join(", ", run.Encounters.Select(pair => $"'{pair.Key}'=#{pair.Value.Pokemon}")));
+            await PullRemoteEncountersAsync(run, cancellationToken);
+        }
 
         var runChanged = false;
         var faintedLocations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var processedSpecies = new HashSet<int>();
+        var validPokemonCount = 0;
 
         foreach (var slot in slots.OrderBy(slot => slot.Box is null ? 0 : 1).ThenBy(slot => slot.SlotId))
         {
             var pokemon = slot.Pokemon;
-            if (pokemon is null || pokemon.IsEgg || pokemon.Species <= 0) continue;
+            var source = slot.Box is null ? $"Team-Slot {slot.SlotId}" : $"Box {slot.Box}, Slot {slot.SlotId}";
 
-            // One local encounter per species. Prefer the party copy over a box
-            // copy because it carries the currently relevant status.
-            if (!processedSpecies.Add(pokemon.Species)) continue;
+            if (pokemon is null)
+            {
+                Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {source}: leer.");
+                continue;
+            }
+
+            Console.WriteLine(
+                $"[SOULLOCKE-SYNC #{cycle}] {source}: '{pokemon.Nickname ?? "<kein Spitzname>"}' / " +
+                $"{pokemon.SpeciesName} (#{pokemon.Species}), PID={pokemon.Pid}, Ei={pokemon.IsEgg}, " +
+                $"Fangort-ID={pokemon.LocationMet}, Level={pokemon.Level}, KP={pokemon.Hp.Current}/{pokemon.Hp.Max}.");
+
+            if (pokemon.IsEgg || pokemon.Species <= 0)
+            {
+                Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {source}: übersprungen wegen Ei oder ungültiger Spezies-ID.");
+                continue;
+            }
+
+            validPokemonCount++;
+
+            if (!processedSpecies.Add(pokemon.Species))
+            {
+                Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {source}: übersprungen, Spezies #{pokemon.Species} wurde bereits in diesem Durchlauf verarbeitet.");
+                continue;
+            }
 
             var mappedLocation = _locationMapper.GetLocationName(pokemon.LocationMet);
             var location = mappedLocation ?? $"Unbekannter Fangort ({pokemon.LocationMet})";
+            Console.WriteLine(
+                $"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Fangort-ID {pokemon.LocationMet} => " +
+                $"Mapper='{mappedLocation ?? "<kein Treffer>"}', verwendet='{location}', normalisiert='{NormalizeLocation(location)}'.");
+
             var gameEntry = new KnownPokemonEntry
             {
                 UniqueId = CreateUniqueId(pokemon),
@@ -128,17 +182,28 @@ public sealed class SyncService
 
             var mergedId = await _knownPokemon.MergeGamePokemonAsync(
                 gameEntry.UniqueId, gameEntry, slot.Box is not null, cancellationToken);
+            Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: lokal zusammengeführt unter ID '{mergedId}'.");
 
-            if (run is null) continue;
+            if (run is null)
+            {
+                Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: kein Soullocke-Run verfügbar, nur lokal aktualisiert.");
+                continue;
+            }
 
-            // Reuse the canonical spelling already present in Soullocke. If no
-            // matching place exists, the game's displayed location becomes a
-            // new encounter key instead of being silently skipped.
-            var remoteKey = FindLocationKey(run.Encounters, location) ?? location;
+            var matchingLocationKey = FindLocationKey(run.Encounters, location);
+            var sameSpeciesPair = run.Encounters.FirstOrDefault(pair => pair.Value.Pokemon == pokemon.Species);
+            var sameSpeciesKey = sameSpeciesPair.Value is null ? null : sameSpeciesPair.Key;
+            var remoteKey = matchingLocationKey ?? sameSpeciesKey ?? location;
+
+            Console.WriteLine(
+                $"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Remote-Match Ort='{matchingLocationKey ?? "<keins>"}', " +
+                $"Spezies='{sameSpeciesKey ?? "<keins>"}', Ziel-Key='{remoteKey}'.");
+
             if (!run.Encounters.TryGetValue(remoteKey, out var encounter))
             {
                 encounter = new SoullockeEncounter();
                 run.Encounters[remoteKey] = encounter;
+                Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: neuer Remote-Eintrag unter '{remoteKey}' angelegt.");
             }
 
             var oldStatus = NormalizeStatus(encounter.Status);
@@ -148,34 +213,57 @@ public sealed class SyncService
             var newStatus = oldStatus is "brofailed" or "notcaught" ? oldStatus : gameStatus;
             var nickname = string.IsNullOrWhiteSpace(pokemon.Nickname) ? null : pokemon.Nickname;
 
+            Console.WriteLine(
+                $"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Remote vorher Pokémon={encounter.Pokemon}, " +
+                $"Spitzname='{encounter.Nickname ?? "<leer>"}', Status='{oldStatus}'; " +
+                $"lokal Pokémon={pokemon.Species}, Spitzname='{nickname ?? "<leer>"}', Status='{gameStatus}'; Ergebnis='{newStatus}'.");
+
             if (newStatus is "brofailed" or "notcaught")
             {
                 await _knownPokemon.UpsertSoullockeEncounterAsync(
                     mergedId, pokemon.Species, nickname, remoteKey, newStatus, cancellationToken);
             }
 
-            if (encounter.Pokemon != pokemon.Species ||
-                !string.Equals(encounter.Nickname, nickname, StringComparison.Ordinal) ||
-                oldStatus != newStatus)
+            var speciesChanged = encounter.Pokemon != pokemon.Species;
+            var nicknameChanged = !string.Equals(encounter.Nickname, nickname, StringComparison.Ordinal);
+            var statusChanged = oldStatus != newStatus;
+
+            if (speciesChanged || nicknameChanged || statusChanged)
             {
                 encounter.Pokemon = pokemon.Species;
                 encounter.Nickname = nickname;
                 encounter.Status = newStatus;
                 runChanged = true;
-                Console.WriteLine($"Soullocke vorgemerkt: {pokemon.SpeciesName} · {remoteKey} · {newStatus}");
+                Console.WriteLine(
+                    $"[SOULLOCKE-SYNC #{cycle}] VORGEMERKT {pokemon.SpeciesName}: " +
+                    $"speciesChanged={speciesChanged}, nicknameChanged={nicknameChanged}, statusChanged={statusChanged}, Ort='{remoteKey}'.");
                 if (newStatus == "fainted" && oldStatus != "fainted")
                     faintedLocations.Add(remoteKey);
+            }
+            else
+            {
+                Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] {pokemon.SpeciesName}: Remote-Daten bereits identisch, kein Save erforderlich.");
             }
 
             await _knownPokemon.MarkSoullockeSyncedAsync(mergedId, cancellationToken);
         }
 
+        Console.WriteLine(
+            $"[SOULLOCKE-SYNC #{cycle}] Auswertung: gültige lokale Pokémon={validPokemonCount}, " +
+            $"eindeutige Spezies={processedSpecies.Count}, runChanged={runChanged}, Remote-Einträge danach={run?.Encounters.Count ?? 0}.");
+
         if (run is not null && runChanged)
         {
+            Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] SAVE START: " +
+                              string.Join(", ", run.Encounters.Select(pair => $"'{pair.Key}'=#{pair.Value.Pokemon}/{pair.Value.Status}")));
             await _soullockeClient.SaveRunAsync(run.Encounters, cancellationToken);
-            Console.WriteLine($"Soullocke: {processedSpecies.Count} lokale Pokémon geprüft und Begegnungen gespeichert.");
+            Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] SAVE ERFOLGREICH: {processedSpecies.Count} lokale Pokémon geprüft.");
             foreach (var location in faintedLocations)
                 await _soullockeClient.MarkLinkedPartnerBroFailedAsync(location, cancellationToken);
+        }
+        else if (run is not null)
+        {
+            Console.WriteLine($"[SOULLOCKE-SYNC #{cycle}] Kein Save ausgeführt, weil keine Änderung erkannt wurde.");
         }
     }
 
