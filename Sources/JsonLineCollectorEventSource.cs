@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using SoulBuddy.Models;
 
@@ -25,20 +24,10 @@ public sealed class JsonLineCollectorEventSource
         _eventFilePath = eventFilePath;
         _partySource = partySource;
         _liveStateSource = liveStateSource;
-
-        Console.WriteLine(
-            $"[LIVE-PARTY-INSTANCE] Collector verwendet LivePartySource " +
-            $"#{RuntimeHelpers.GetHashCode(partySource)}.");
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        Console.WriteLine($"Collector-Ereignisse: {_eventFilePath}");
-        Console.WriteLine(
-            $"[LIVE-PARTY-INSTANCE] Collector-Loop arbeitet mit LivePartySource " +
-            $"#{RuntimeHelpers.GetHashCode(_partySource)}.");
-        Console.WriteLine("Warte auf Nachrichten vom Emulator.");
-
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -53,8 +42,7 @@ public sealed class JsonLineCollectorEventSource
                 await ReadAvailableEventsAsync(cancellationToken);
                 await Task.Delay(250, cancellationToken);
             }
-            catch (OperationCanceledException)
-                when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 break;
             }
@@ -62,9 +50,8 @@ public sealed class JsonLineCollectorEventSource
             {
                 await Task.Delay(500, cancellationToken);
             }
-            catch (UnauthorizedAccessException ex)
+            catch (UnauthorizedAccessException)
             {
-                Console.WriteLine($"Zugriff auf die Event-Datei nicht möglich: {ex.Message}");
                 await Task.Delay(1000, cancellationToken);
             }
         }
@@ -73,9 +60,7 @@ public sealed class JsonLineCollectorEventSource
     private void InitializeReadPosition()
     {
         if (_readPositionInitialized)
-        {
             return;
-        }
 
         _readPosition = new FileInfo(_eventFilePath).Length;
         _readPositionInitialized = true;
@@ -90,9 +75,7 @@ public sealed class JsonLineCollectorEventSource
             FileShare.ReadWrite | FileShare.Delete);
 
         if (_readPosition > stream.Length)
-        {
             _readPosition = 0;
-        }
 
         stream.Seek(_readPosition, SeekOrigin.Begin);
         using var reader = new StreamReader(stream);
@@ -125,29 +108,20 @@ public sealed class JsonLineCollectorEventSource
     private async Task ProcessLineAsync(string line, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(line))
-        {
             return;
-        }
 
         CollectorEvent? collectorEvent;
-
         try
         {
             collectorEvent = JsonSerializer.Deserialize<CollectorEvent>(line, _jsonOptions);
         }
-        catch (JsonException ex)
-        {
-            Console.WriteLine($"Ungültige Collector-Nachricht: {ex.Message}");
-            Console.WriteLine($"  Inhalt: {line}");
-            return;
-        }
-
-        if (collectorEvent is null)
+        catch (JsonException)
         {
             return;
         }
 
-        await HandleEventAsync(collectorEvent, cancellationToken);
+        if (collectorEvent is not null)
+            await HandleEventAsync(collectorEvent, cancellationToken);
     }
 
     private async Task HandleEventAsync(
@@ -157,52 +131,21 @@ public sealed class JsonLineCollectorEventSource
         switch (collectorEvent.Type)
         {
             case "collector-started":
-                HandleCollectorStarted(collectorEvent);
+                Console.WriteLine(
+                    $"Spiel wurde live verbunden: {collectorEvent.Game ?? "unbekannt"}.");
                 break;
 
             case "party-update":
-                Console.WriteLine(
-                    $"[LIVE-PARTY-INSTANCE] Party-Update wird auf LivePartySource " +
-                    $"#{RuntimeHelpers.GetHashCode(_partySource)} angewendet.");
                 await _partySource.ApplyUpdateAsync(collectorEvent.Slots, cancellationToken);
-                LogUpdate("Party", collectorEvent);
                 break;
 
             case "box-update":
-                Console.WriteLine(
-                    $"[LIVE-PARTY-INSTANCE] Box-Update wird auf LivePartySource " +
-                    $"#{RuntimeHelpers.GetHashCode(_partySource)} angewendet.");
                 await _partySource.ApplyBoxUpdateAsync(collectorEvent.Slots, cancellationToken);
-                LogUpdate("Box", collectorEvent);
                 break;
 
             case "player-state" when collectorEvent.State is not null:
                 _liveStateSource.Apply(collectorEvent.State);
                 break;
-
-            default:
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] Collector-Ereignis empfangen: {collectorEvent.Type}");
-                break;
         }
-    }
-
-    private static void HandleCollectorStarted(CollectorEvent collectorEvent)
-    {
-        Console.WriteLine(
-            $"[{DateTime.Now:HH:mm:ss}] Collector erkannt. " +
-            $"Spiel: {collectorEvent.Game ?? "unbekannt"}, " +
-            $"Protokoll: {collectorEvent.ProtocolVersion}");
-    }
-
-    private static void LogUpdate(string updateType, CollectorEvent collectorEvent)
-    {
-        var generationText = collectorEvent.Generation?.ToString() ?? "unbekannt";
-
-        Console.WriteLine(
-            $"[{DateTime.Now:HH:mm:ss}] {updateType}-Update übernommen. " +
-            $"Spiel: {collectorEvent.Game ?? "unbekannt"}, " +
-            $"Generation: {generationText}, " +
-            $"geänderte Slots: {collectorEvent.Slots.Count}");
     }
 }
