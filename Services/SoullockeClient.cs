@@ -12,6 +12,7 @@ public sealed class SoullockeClient
     private readonly AppConfig _config;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
     private Dictionary<string, PlayerMappingEntry>? _playerMapping;
+    private string _sessionGameName = string.Empty;
     private bool _initialized;
 
     public SoullockeClient(HttpClient httpClient, AppConfig config)
@@ -101,8 +102,8 @@ public sealed class SoullockeClient
         {
             PlayerId = playerId,
             RunNumber = currentRun.RunNumber > 0 ? currentRun.RunNumber : _config.RunNumber,
-            GameName = string.IsNullOrWhiteSpace(currentRun.GameName) ? "soulsilver" : currentRun.GameName,
-            Status = string.IsNullOrWhiteSpace(currentRun.Status) ? "active" : currentRun.Status,
+            GameName = _sessionGameName,
+            Status = string.IsNullOrWhiteSpace(currentRun.Status) ? "open" : currentRun.Status,
             Encounters = encounters
         };
 
@@ -132,10 +133,13 @@ public sealed class SoullockeClient
             if (_initialized) return;
             if (string.IsNullOrWhiteSpace(_config.SessionId)) throw new InvalidOperationException("Der Soullocke-Link enthält keine gültige Session-ID.");
             var session = await LoadSessionMetadataAsync(cancellationToken);
+            _sessionGameName = NormalizeSessionGameName(session.Settings.Game);
             ResolvePlayerAssignment(session);
             _config.AuthToken = await AuthenticateAsync(cancellationToken);
             _initialized = true;
-            Console.WriteLine($"Soullocke zugeordnet: {_config.PlayerName} → {_config.PlayerId} / {_config.TeamName}");
+            Console.WriteLine(
+                $"Soullocke zugeordnet: {_config.PlayerName} → {_config.PlayerId} / {_config.TeamName}; " +
+                $"Session-Spiel='{_sessionGameName}'.");
         }
         finally { _initializationLock.Release(); }
     }
@@ -181,6 +185,20 @@ public sealed class SoullockeClient
         var result = JsonSerializer.Deserialize<SoullockePasswordValidationResponse>(body, JsonOptions);
         if (result is null || !result.IsValid || string.IsNullOrWhiteSpace(result.AuthToken)) throw new InvalidOperationException("Das eingegebene Soullocke-Passwort ist ungültig.");
         return result.AuthToken;
+    }
+
+    private static string NormalizeSessionGameName(string? gameName)
+    {
+        var normalized = (gameName ?? string.Empty).Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalized))
+            throw new InvalidOperationException("Die Soullocke-Sitzung enthält kein gültiges Spiel.");
+
+        return normalized switch
+        {
+            "heartgold" or "heart-gold" or "hg" => "heartgold",
+            "soulsilver" or "soul-silver" or "ss" => "soulsilver",
+            _ => normalized
+        };
     }
 
     private static string Truncate(string value, int maxLength) =>
