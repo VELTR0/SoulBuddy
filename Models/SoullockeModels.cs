@@ -115,6 +115,12 @@ public sealed class SaveRunRequest
     [JsonPropertyName("runNumber")]
     public int RunNumber { get; init; }
 
+    [JsonPropertyName("gameName")]
+    public required string GameName { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
     [JsonPropertyName("encounters")]
     public required Dictionary<string, SoullockeEncounter> Encounters { get; init; }
 }
