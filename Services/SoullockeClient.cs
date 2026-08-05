@@ -86,6 +86,7 @@ public sealed class SoullockeClient
 
         if (result.TryGetValue(_config.PlayerId, out var run))
         {
+            NormalizeLoadedEncounterKeys(run);
             Console.WriteLine(
                 $"[SOULLOCKE-HTTP] LOAD OWN RUN OK: '{_config.PlayerName}'/{_config.PlayerId}=" +
                 $"{run.Encounters.Count} Begegnungen.");
@@ -120,6 +121,7 @@ public sealed class SoullockeClient
             ?? throw new InvalidOperationException("Der lokale Soullocke-Spieler wurde nicht initialisiert.");
         var localPlayer = mapping[_config.PlayerId];
         var currentRun = await LoadRunAsync(cancellationToken);
+        var apiEncounters = ConvertEncounterKeysForSoullocke(encounters);
 
         var query =
             $"game/saveRun?sessionId={Uri.EscapeDataString(_config.SessionId)}&" +
@@ -133,14 +135,14 @@ public sealed class SoullockeClient
             RunNumber = currentRun.RunNumber > 0 ? currentRun.RunNumber : _config.RunNumber,
             GameName = _sessionGameName,
             Status = string.IsNullOrWhiteSpace(currentRun.Status) ? "open" : currentRun.Status,
-            Encounters = encounters
+            Encounters = apiEncounters
         };
 
         Console.WriteLine(
             $"[SOULLOCKE-HTTP] SAVE OWN RUN START: Spieler='{localPlayer.PlayerName}'/" +
-            $"{_config.PlayerId}, Begegnungen={encounters.Count}: " +
-            string.Join(", ", encounters.Select(pair =>
-                $"'{pair.Key}'=#{pair.Value.Pokemon}/{pair.Value.Status}")));
+            $"{_config.PlayerId}, Begegnungen={apiEncounters.Count}: " +
+            string.Join(", ", apiEncounters.Select(pair =>
+                $"'{(pair.Key.Length == 0 ? "<leer>" : pair.Key)}'=#{pair.Value.Pokemon}/{pair.Value.Status}")));
 
         using var response = await SendWithTimeoutAsync(
             token => _httpClient.PostAsJsonAsync(ApiBaseUrl + query, request, token),
@@ -162,6 +164,58 @@ public sealed class SoullockeClient
         Console.WriteLine(
             $"[SOULLOCKE-HTTP] SAVE OWN RUN OK: ausschließlich '{localPlayer.PlayerName}'/" +
             $"{_config.PlayerId} wurde aktualisiert.");
+    }
+
+    private static Dictionary<string, SoullockeEncounter> ConvertEncounterKeysForSoullocke(
+        IReadOnlyDictionary<string, SoullockeEncounter> encounters)
+    {
+        var converted = new Dictionary<string, SoullockeEncounter>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pair in encounters)
+        {
+            var apiLocation = pair.Key.Trim() switch
+            {
+                "Dunkelhöhle" or "Dark Cave" => "Finsterhöhle",
+                "Knofensaturm" or "Sprout Tower" => string.Empty,
+                _ => pair.Key.Trim()
+            };
+
+            converted[apiLocation] = pair.Value;
+
+            if (!string.Equals(apiLocation, pair.Key, StringComparison.Ordinal))
+            {
+                Console.WriteLine(
+                    $"[SOULLOCKE-LOCATION] '{pair.Key}' wird für Soullocke als " +
+                    $"'{(apiLocation.Length == 0 ? "<leer>" : apiLocation)}' gespeichert.");
+            }
+        }
+
+        return converted;
+    }
+
+    private static void NormalizeLoadedEncounterKeys(SoullockeRun run)
+    {
+        foreach (var pair in run.Encounters.ToArray())
+        {
+            var internalLocation = pair.Key.Trim() switch
+            {
+                "Finsterhöhle" or "Dark Cave" => "Dunkelhöhle",
+                "Sprout Tower" => "Knofensaturm",
+                "" => "Knofensaturm",
+                _ => pair.Key.Trim()
+            };
+
+            if (string.Equals(pair.Key, internalLocation, StringComparison.Ordinal))
+                continue;
+
+            run.Encounters.Remove(pair.Key);
+            run.Encounters[internalLocation] = pair.Value;
+
+            Console.WriteLine(
+                $"[SOULLOCKE-LOCATION] Geladener Soullocke-Ort " +
+                $"'{(pair.Key.Length == 0 ? "<leer>" : pair.Key)}' wird intern als " +
+                $"'{internalLocation}' verwendet.");
+        }
     }
 
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
