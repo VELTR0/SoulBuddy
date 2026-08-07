@@ -3,6 +3,7 @@ namespace SoulBuddy.Models;
 public enum NuzlockeRuleEventType
 {
     PokemonKnockedOut,
+    PartnerPokemonKnockedOut,
     CatchableEncounter,
     CatchSucceeded,
     CatchFailed
@@ -20,4 +21,8 @@ public sealed class NuzlockeRuleEvent : EventArgs
     public long Pid { get; init; }
     public bool IsShiny { get; init; }
     public bool IsFirstEncounter { get; init; }
+    public string? PartnerPlayerName { get; init; }
+    public int? LinkedSpeciesId { get; init; }
+    public string? LinkedSpeciesName { get; init; }
+    public string? LinkedNickname { get; init; }
 }
