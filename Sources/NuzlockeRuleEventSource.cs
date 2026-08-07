@@ -162,6 +162,31 @@ public sealed class NuzlockeRuleEventSource
         }
     }
 
+    public void PublishPartnerPokemonKnockedOut(
+        string partnerPlayerName,
+        int partnerSpeciesId,
+        string partnerSpeciesName,
+        string? partnerNickname,
+        string locationName,
+        int? linkedSpeciesId,
+        string? linkedSpeciesName,
+        string? linkedNickname)
+    {
+        Publish(new NuzlockeRuleEvent
+        {
+            Type = NuzlockeRuleEventType.PartnerPokemonKnockedOut,
+            OccurredAt = DateTimeOffset.Now,
+            SpeciesId = partnerSpeciesId,
+            SpeciesName = partnerSpeciesName,
+            Nickname = partnerNickname,
+            LocationName = locationName,
+            PartnerPlayerName = partnerPlayerName,
+            LinkedSpeciesId = linkedSpeciesId,
+            LinkedSpeciesName = linkedSpeciesName,
+            LinkedNickname = linkedNickname
+        });
+    }
+
     private string ResolveLocationName(int? locationId, string stateLocationName)
     {
         if (locationId is > 0)
@@ -178,14 +203,21 @@ public sealed class NuzlockeRuleEventSource
     {
         EventOccurred?.Invoke(this, ruleEvent);
 
-        var name = string.IsNullOrWhiteSpace(ruleEvent.Nickname)
-            ? ruleEvent.SpeciesName
-            : $"{ruleEvent.Nickname} ({ruleEvent.SpeciesName})";
+        var name = FormatPokemon(ruleEvent.SpeciesName, ruleEvent.Nickname);
 
         switch (ruleEvent.Type)
         {
             case NuzlockeRuleEventType.PokemonKnockedOut:
                 Console.WriteLine($"Nuzlocke-Event: {name} ist K.O. gegangen.");
+                break;
+
+            case NuzlockeRuleEventType.PartnerPokemonKnockedOut:
+                var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
+                    ? "Das verbundene Pokémon"
+                    : FormatPokemon(ruleEvent.LinkedSpeciesName, ruleEvent.LinkedNickname);
+                Console.WriteLine(
+                    $"SoulLink-Event: Partner-Pokémon {name} ist K.O. gegangen. " +
+                    $"{linkedName} muss abgelegt werden.");
                 break;
 
             case NuzlockeRuleEventType.CatchableEncounter:
@@ -209,6 +241,11 @@ public sealed class NuzlockeRuleEventSource
                 break;
         }
     }
+
+    private static string FormatPokemon(string species, string? nickname) =>
+        string.IsNullOrWhiteSpace(nickname)
+            ? species
+            : $"{nickname} ({species})";
 
     private static long BuildFallbackIdentity(PartyPokemon pokemon) =>
         -Math.Abs(HashCode.Combine(
