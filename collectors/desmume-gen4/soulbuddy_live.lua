@@ -1,4 +1,4 @@
--- SoulBuddy HGSS live collector with integrated four-second event overlay.
+-- SoulBuddy HGSS live collector with integrated event overlay.
 -- Load only this file in DeSmuME.
 -- It reads emulator state, sends party/box/live-battle data to SoulBuddy,
 -- and displays SoulBuddy rule events without writing to game memory.
@@ -381,7 +381,7 @@ local function read_new_overlay_messages()
         if decoded ~= nil and decoded.message ~= nil and decoded.message ~= "" then
             overlay_queue[#overlay_queue + 1] = {
                 message = tostring(decoded.message),
-                duration = tonumber(decoded.durationSeconds) or 4
+                duration = tonumber(decoded.durationSeconds) or 12
             }
         end
     end
@@ -416,14 +416,14 @@ local function draw_overlay_messages()
         end
     end
 
-    local text = "SoulBuddy: " .. active_overlay_message.message
+    local text = active_overlay_message.message
 
-    -- Exact same position and style as the successful overlay test.
+    -- Lower edge area of the upper DS screen.
     if gui.box ~= nil then
-        gui.box(28, 168, 228, 190, "black", "white")
+        gui.box(28, 142, 228, 164, "black", "white")
     end
 
-    gui.text(42, 176, text, "white", "black")
+    gui.text(42, 150, text, "white", "black")
 end
 
 if gui ~= nil and gui.register ~= nil then
