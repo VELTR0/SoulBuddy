@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using SoulBuddy.Data;
 using SoulBuddy.Models;
 using SoulBuddy.Sources;
@@ -14,6 +15,8 @@ public sealed class SyncService
     private readonly NuzlockeRuleEventSource _ruleEvents;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
     private readonly Dictionary<string, string> _partnerStatusByLocation =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SoulLinkPartnerInfo> _partnerLinksByLocation =
         new(StringComparer.OrdinalIgnoreCase);
 
     private bool _initialized;
@@ -34,6 +37,18 @@ public sealed class SyncService
         _locationMapper = locationMapper;
         _ruleEvents = ruleEvents;
         _config = config;
+    }
+
+    public bool TryGetPartnerLink(string location, out SoulLinkPartnerInfo? link)
+    {
+        if (_partnerLinksByLocation.TryGetValue(NormalizeLocation(location), out var found))
+        {
+            link = found;
+            return true;
+        }
+
+        link = null;
+        return false;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
@@ -123,6 +138,11 @@ public sealed class SyncService
         var partnerRun = _config.SoullockeEnabled
             ? await _soullockeClient.LoadPartnerRunAsync(cancellationToken)
             : null;
+
+        if (partnerRun is not null)
+            UpdatePartnerLinks(partnerRun);
+        else if (_config.SoullockeEnabled)
+            _partnerLinksByLocation.Clear();
 
         if (run is not null)
             await PullRemoteEncountersAsync(run, cancellationToken);
@@ -289,13 +309,45 @@ public sealed class SyncService
     private void CapturePartnerSnapshot(SoullockeRun? partnerRun)
     {
         _partnerStatusByLocation.Clear();
+        _partnerLinksByLocation.Clear();
+
         if (partnerRun is not null)
         {
+            UpdatePartnerLinks(partnerRun);
             foreach (var pair in partnerRun.Encounters)
                 _partnerStatusByLocation[NormalizeLocation(pair.Key)] = NormalizeStatus(pair.Value.Status);
         }
 
         _partnerSnapshotInitialized = true;
+    }
+
+    private void UpdatePartnerLinks(SoullockeRun partnerRun)
+    {
+        var currentLocations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pair in partnerRun.Encounters)
+        {
+            if (pair.Value.Pokemon <= 0)
+                continue;
+
+            var location = ToDisplayLocation(pair.Key);
+            var normalizedLocation = NormalizeLocation(location);
+            currentLocations.Add(normalizedLocation);
+            _partnerLinksByLocation[normalizedLocation] = new SoulLinkPartnerInfo
+            {
+                PlayerName = _soullockeClient.PartnerPlayerName ?? "Partner",
+                SpeciesId = pair.Value.Pokemon,
+                Nickname = pair.Value.Nickname,
+                Location = location,
+                Status = NormalizeStatus(pair.Value.Status)
+            };
+        }
+
+        foreach (var key in _partnerLinksByLocation.Keys)
+        {
+            if (!currentLocations.Contains(key))
+                _partnerLinksByLocation.TryRemove(key, out _);
+        }
     }
 
     private async Task<bool> ApplyPartnerKnockoutsAsync(
