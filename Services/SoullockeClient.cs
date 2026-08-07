@@ -28,6 +28,9 @@ public sealed class SoullockeClient
     private string? _partnerPlayerId;
     private string? _partnerPlayerName;
     private string _sessionGameName = string.Empty;
+    private int _localRunNumber;
+    private string _localRunStatus = "open";
+    private bool _localRunMetadataInitialized;
     private bool _initialized;
 
     public SoullockeClient(HttpClient httpClient, AppConfig config)
@@ -38,15 +41,29 @@ public sealed class SoullockeClient
 
     public string? PartnerPlayerName => _partnerPlayerName;
 
+    /// <summary>
+    /// Loads the local player's run from Soullocke. SoulBuddy calls this exactly once
+    /// during startup. Afterwards the local run is maintained inside SoulBuddy and only
+    /// written back to Soullocke.
+    /// </summary>
     public async Task<SoullockeRun> LoadRunAsync(CancellationToken cancellationToken)
     {
         var runs = await LoadAllRunsAsync(cancellationToken);
-        return runs.TryGetValue(_config.PlayerId, out var run)
-            ? run
-            : throw new InvalidOperationException(
+        if (!runs.TryGetValue(_config.PlayerId, out var run))
+        {
+            throw new InvalidOperationException(
                 $"Der Soullocke-Run für {_config.PlayerName} ({_config.PlayerId}) wurde nicht gefunden.");
+        }
+
+        _localRunNumber = run.RunNumber > 0 ? run.RunNumber : _config.RunNumber;
+        _localRunStatus = string.IsNullOrWhiteSpace(run.Status) ? "open" : run.Status;
+        _localRunMetadataInitialized = true;
+        return run;
     }
 
+    /// <summary>
+    /// Partner data is read-only. No code path in SoulBuddy saves the partner run.
+    /// </summary>
     public async Task<SoullockeRun?> LoadPartnerRunAsync(CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
@@ -134,10 +151,15 @@ public sealed class SoullockeClient
     {
         await EnsureInitializedAsync(cancellationToken);
 
+        if (!_localRunMetadataInitialized)
+        {
+            throw new InvalidOperationException(
+                "Der eigene Soullocke-Run wurde noch nicht initial eingelesen und darf noch nicht gespeichert werden.");
+        }
+
         var mapping = _localPlayerMapping
             ?? throw new InvalidOperationException("Der lokale Soullocke-Spieler wurde nicht initialisiert.");
         var localPlayer = mapping[_config.PlayerId];
-        var currentRun = await LoadRunAsync(cancellationToken);
         var apiEncounters = ConvertEncounterKeysForSoullocke(encounters);
 
         var query =
@@ -149,9 +171,9 @@ public sealed class SoullockeClient
         var request = new SaveRunRequest
         {
             PlayerId = _config.PlayerId,
-            RunNumber = currentRun.RunNumber > 0 ? currentRun.RunNumber : _config.RunNumber,
+            RunNumber = _localRunNumber > 0 ? _localRunNumber : _config.RunNumber,
             GameName = _sessionGameName,
-            Status = string.IsNullOrWhiteSpace(currentRun.Status) ? "open" : currentRun.Status,
+            Status = string.IsNullOrWhiteSpace(_localRunStatus) ? "open" : _localRunStatus,
             Encounters = apiEncounters
         };
 
@@ -370,10 +392,14 @@ public sealed class SoullockeClient
             }
         };
 
+        // SoulBuddy's SoulLink partner is the other unique player in the session.
+        // The Soullocke UI may place the two players in different teams, so team
+        // membership must never be used to decide who the partner is.
         var partners = entries
-            .Where(entry =>
-                string.Equals(entry.TeamName, local.TeamName, StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(entry.PlayerId, local.PlayerId, StringComparison.OrdinalIgnoreCase))
+            .Where(entry => !string.Equals(
+                entry.PlayerId,
+                local.PlayerId,
+                StringComparison.OrdinalIgnoreCase))
             .ToArray();
 
         if (partners.Length == 1)
