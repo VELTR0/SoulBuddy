@@ -24,6 +24,9 @@ public sealed class SoullockeClient
         };
 
     private Dictionary<string, PlayerMappingEntry>? _localPlayerMapping;
+    private Dictionary<string, PlayerMappingEntry>? _partnerPlayerMapping;
+    private string? _partnerPlayerId;
+    private string? _partnerPlayerName;
     private string _sessionGameName = string.Empty;
     private bool _initialized;
 
@@ -32,6 +35,8 @@ public sealed class SoullockeClient
         _httpClient = httpClient;
         _config = config;
     }
+
+    public string? PartnerPlayerName => _partnerPlayerName;
 
     public async Task<SoullockeRun> LoadRunAsync(CancellationToken cancellationToken)
     {
@@ -42,6 +47,20 @@ public sealed class SoullockeClient
                 $"Der Soullocke-Run für {_config.PlayerName} ({_config.PlayerId}) wurde nicht gefunden.");
     }
 
+    public async Task<SoullockeRun?> LoadPartnerRunAsync(CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(_partnerPlayerId) || _partnerPlayerMapping is null)
+            return null;
+
+        var runs = await LoadRunsAsync(
+            _partnerPlayerId,
+            _partnerPlayerMapping,
+            cancellationToken);
+
+        return runs.TryGetValue(_partnerPlayerId, out var run) ? run : null;
+    }
+
     public async Task<IReadOnlyDictionary<string, SoullockeRun>> LoadAllRunsAsync(
         CancellationToken cancellationToken)
     {
@@ -50,6 +69,14 @@ public sealed class SoullockeClient
         var mapping = _localPlayerMapping
             ?? throw new InvalidOperationException("Der lokale Soullocke-Spieler wurde nicht initialisiert.");
 
+        return await LoadRunsAsync(_config.PlayerId, mapping, cancellationToken);
+    }
+
+    private async Task<IReadOnlyDictionary<string, SoullockeRun>> LoadRunsAsync(
+        string playerId,
+        Dictionary<string, PlayerMappingEntry> mapping,
+        CancellationToken cancellationToken)
+    {
         var request = new LoadRunsRequest
         {
             SessionId = _config.SessionId,
@@ -57,7 +84,7 @@ public sealed class SoullockeClient
             [
                 new LoadRunPlayer
                 {
-                    PlayerId = _config.PlayerId,
+                    PlayerId = playerId,
                     RunNumber = _config.RunNumber
                 }
             ],
@@ -82,7 +109,7 @@ public sealed class SoullockeClient
         var result = JsonSerializer.Deserialize<BatchLoadResponse>(body, JsonOptions)?.PlayerData
             ?? throw new InvalidOperationException("Soullocke hat ungültige Run-Daten zurückgegeben.");
 
-        if (result.TryGetValue(_config.PlayerId, out var run))
+        if (result.TryGetValue(playerId, out var run))
             NormalizeLoadedEncounterKeys(run);
 
         return result;
@@ -342,6 +369,33 @@ public sealed class SoullockeClient
                 PlayerName = local.PlayerName
             }
         };
+
+        var partners = entries
+            .Where(entry =>
+                string.Equals(entry.TeamName, local.TeamName, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(entry.PlayerId, local.PlayerId, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        if (partners.Length == 1)
+        {
+            var partner = partners[0];
+            _partnerPlayerId = partner.PlayerId;
+            _partnerPlayerName = partner.PlayerName;
+            _partnerPlayerMapping = new Dictionary<string, PlayerMappingEntry>(StringComparer.OrdinalIgnoreCase)
+            {
+                [partner.PlayerId] = new PlayerMappingEntry
+                {
+                    TeamName = partner.TeamName,
+                    PlayerName = partner.PlayerName
+                }
+            };
+        }
+        else
+        {
+            _partnerPlayerId = null;
+            _partnerPlayerName = null;
+            _partnerPlayerMapping = null;
+        }
     }
 
     private async Task<string> AuthenticateAsync(CancellationToken cancellationToken)
