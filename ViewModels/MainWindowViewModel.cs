@@ -40,6 +40,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     public ObservableCollection<PokemonCardViewModel> StoredPokemon { get; } = [];
     public ObservableCollection<string> ActivityFeed { get; } = [];
 
+    public bool SoullockeEnabled => _runtime?.Config.SoullockeEnabled == true;
+    public string? SoullockePartnerName => _runtime?.SyncService.PartnerPlayerName;
+
     public string StatusText
     {
         get => _statusText;
@@ -124,7 +127,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                 ? "Soullocke aktiviert"
                 : "Lokal / Offline";
             LocalPlayerStatus = "🟢 Spiel  verbunden: HeartGold / SoulSilver";
-            PartnerStatus = "Offline · Über die Netzwerksteuerung optional verbinden";
+            PartnerStatus = _runtime.Config.SoullockeEnabled
+                ? $"Soullocke · {_runtime.SyncService.PartnerPlayerName ?? "Partner"}"
+                : "Offline · Über die Netzwerksteuerung optional verbinden";
             AddActivity("SoulBuddy gestartet");
             AddActivity("Emulator-Collector verbunden");
 
@@ -159,9 +164,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private async Task RefreshAsync()
     {
         if (_runtime is null || _refreshInProgress)
-        {
             return;
-        }
 
         _refreshInProgress = true;
 
@@ -195,9 +198,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     {
         var network = SoulBuddyNetworkService.Current;
         if (network is null)
-        {
             return;
-        }
 
         if (network.State == SoulBuddyNetworkState.Connected)
         {
@@ -231,6 +232,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
             await network.SendPlayerSnapshotAsync(snapshot);
         }
+        else if (SoullockeEnabled)
+        {
+            ConnectionText = "Soullocke aktiviert";
+        }
         else
         {
             ConnectionText = network.State switch
@@ -249,6 +254,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     {
         if (snapshot is null)
         {
+            if (SoullockeEnabled)
+            {
+                PartnerStatus = $"Soullocke · {SoullockePartnerName ?? "Partner"}";
+                return;
+            }
+
             PartnerStatus = network.State switch
             {
                 SoulBuddyNetworkState.Connected => $"🟢 {network.RemotePlayerName} verbunden · warte auf Spieldaten …",
@@ -263,8 +274,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         var activeText = snapshot.ActivePokemon is null
             ? "Aktiv: unbekannt"
             : $"Aktiv: {snapshot.ActivePokemon.DisplayName} · Lv. {snapshot.ActivePokemon.Level} · {snapshot.ActivePokemon.CurrentHp}/{snapshot.ActivePokemon.MaxHp} KP";
-        var age = DateTimeOffset.UtcNow - snapshot.Timestamp;
-        var ageText = age.TotalSeconds < 2 ? "gerade eben" : $"vor {Math.Max(1, (int)age.TotalSeconds)} Sekunden";
 
         PartnerStatus =
             $"🟢 {snapshot.PlayerName} online\n" +
@@ -305,13 +314,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         if (signature != _lastActivitySignature)
         {
             if (state.InBattle && state.Opponent is not null)
-            {
                 AddActivity($"Gegner erkannt: {DisplayPokemonName(state.Opponent)} Lv. {state.Opponent.Level}");
-            }
             else if (!state.InBattle && !string.IsNullOrWhiteSpace(state.LocationName))
-            {
                 AddActivity($"Aufenthalt: {state.LocationName}");
-            }
+
             _lastActivitySignature = signature;
         }
 
@@ -322,9 +328,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     {
         ActivityFeed.Insert(0, $"{DateTime.Now:HH:mm:ss}  {message}");
         while (ActivityFeed.Count > 30)
-        {
             ActivityFeed.RemoveAt(ActivityFeed.Count - 1);
-        }
     }
 
     private void UpdateLiveEncounter(PlayerLiveState state, IReadOnlyList<PartySlot> party)
@@ -351,9 +355,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         }
 
         if (ownPokemon is not null)
-        {
             LocalActivePokemonText = $"Aktiv: {DisplayPokemonName(ownPokemon)} · Lv. {ownPokemon.Level} · {ownPokemon.CurrentHp}/{ownPokemon.MaxHp} KP";
-        }
 
         var location = string.IsNullOrWhiteSpace(state.LocationName)
             ? state.LocationId is null ? "Aufenthaltsort wird ermittelt" : $"Unbekannter Ort ({state.LocationId})"
@@ -377,9 +379,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             ? "Gegner: wird ermittelt …"
             : $"Gegner: {DisplayPokemonName(state.Opponent)} · Lv. {state.Opponent.Level} · {state.Opponent.CurrentHp}/{state.Opponent.MaxHp} KP");
         if (ownPokemon is not null)
-        {
             lines.Add($"Aktiv: {DisplayPokemonName(ownPokemon)} · Lv. {ownPokemon.Level} · {ownPokemon.CurrentHp}/{ownPokemon.MaxHp} KP");
-        }
+
         LiveEncounterTitle = "LIVE ENCOUNTER";
         LiveEncounterText = string.Join(Environment.NewLine, lines);
     }
@@ -398,6 +399,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                 var gender = pokemon.IsGenderless ? "Geschlechtslos" : pokemon.IsFemale ? "Weiblich" : "Männlich";
                 var ball = GetPokeballName(pokemon.Pokeball);
                 var location = GetLocationDisplayName(pokemon.LocationMet);
+                SoulLinkPartnerInfo? partnerLink = null;
+                if (_runtime?.SyncService.TryGetPartnerLink(location, out var foundLink) == true)
+                    partnerLink = foundLink;
+
                 return new PokemonCardViewModel
                 {
                     DisplayName = displayName,
@@ -412,6 +417,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                     Pokeball = ball,
                     IsShiny = pokemon.IsShiny,
                     Subtitle = location,
+                    SoullockePartnerLink = partnerLink,
                     DetailsTitle = displayName,
                     DetailsText =
                         $"Spezies: {pokemon.SpeciesName} (#{pokemon.Species})\n" +
@@ -423,8 +429,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                         $"Pokéball: {ball}\n" +
                         $"Shiny: {(pokemon.IsShiny ? "Ja" : "Nein")}\n" +
                         $"Fanglevel: {pokemon.LevelMet}\n" +
-                        $"Fangort: {location}\n\n" +
-                        "Technische Daten\n" +
+                        $"Fangort: {location}\n" +
+                        (partnerLink is null
+                            ? string.Empty
+                            : $"SoulLink: {partnerLink.DisplayName} ({partnerLink.PlayerName}) · {partnerLink.Status}\n") +
+                        "\nTechnische Daten\n" +
                         $"Fangort-ID: {pokemon.LocationMet}\n" +
                         $"PID: {pokemon.Pid}\n" +
                         $"Trainer-ID: {pokemon.OriginalTrainerId}\n" +
@@ -486,23 +495,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     {
         var next = items.ToArray();
         if (target.Count == next.Length && target.Zip(next).All(pair => ItemsEqual(pair.First, pair.Second)))
-        {
             return;
-        }
 
         target.Clear();
         foreach (var item in next)
-        {
             target.Add(item);
-        }
     }
 
     private static bool ItemsEqual<T>(T left, T right)
     {
         if (ReferenceEquals(left, right))
-        {
             return true;
-        }
 
         if (left is PokemonCardViewModel a && right is PokemonCardViewModel b)
         {
@@ -513,7 +516,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                    a.CurrentHp == b.CurrentHp &&
                    a.MaxHp == b.MaxHp &&
                    a.Subtitle == b.Subtitle &&
-                   a.IsShiny == b.IsShiny;
+                   a.IsShiny == b.IsShiny &&
+                   a.LinkedSpeciesId == b.LinkedSpeciesId &&
+                   a.LinkedDisplayName == b.LinkedDisplayName &&
+                   a.LinkedIsFainted == b.LinkedIsFainted;
         }
 
         return EqualityComparer<T>.Default.Equals(left, right);
