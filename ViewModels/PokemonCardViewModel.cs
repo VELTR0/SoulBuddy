@@ -19,50 +19,56 @@ public sealed class PokemonCardViewModel
     public string Gender { get; init; } = string.Empty;
     public string Pokeball { get; init; } = string.Empty;
     public bool IsShiny { get; init; }
+    public SoulLinkPartnerInfo? SoullockePartnerLink { get; init; }
 
-    private NetworkPokemonSnapshot? ResolvedSoulLink
+    private NetworkPokemonSnapshot? ResolvedNetworkSoulLink
     {
         get
         {
             var network = SoulBuddyNetworkService.Current;
             if (network?.State != SoulBuddyNetworkState.Connected)
-            {
                 return null;
-            }
 
             var remoteParty = network.LatestRemoteSnapshot?.Party;
             if (remoteParty is null || remoteParty.Count == 0)
-            {
                 return null;
-            }
 
             var location = NormalizeLocation(Subtitle);
             if (location.Length == 0)
-            {
                 return null;
-            }
 
             return remoteParty.FirstOrDefault(remote =>
                 NormalizeLocation(remote.Location) == location);
         }
     }
 
-    public bool IsSoulLinked => ResolvedSoulLink is not null;
+    public bool IsSoulLinked =>
+        SoullockePartnerLink is not null ||
+        ResolvedNetworkSoulLink is not null;
 
     public string LinkedDisplayName =>
-        ResolvedSoulLink?.DisplayName ?? string.Empty;
+        SoullockePartnerLink?.DisplayName ??
+        ResolvedNetworkSoulLink?.DisplayName ??
+        string.Empty;
 
     public string LinkedSpecies =>
-        ResolvedSoulLink?.SpeciesName ?? string.Empty;
+        SoullockePartnerLink is not null
+            ? $"Pokémon #{SoullockePartnerLink.SpeciesId}"
+            : ResolvedNetworkSoulLink?.SpeciesName ?? string.Empty;
 
     public int LinkedSpeciesId =>
-        ResolvedSoulLink?.SpeciesId ?? 0;
+        SoullockePartnerLink?.SpeciesId ??
+        ResolvedNetworkSoulLink?.SpeciesId ??
+        0;
 
     public int LinkedCurrentHp =>
-        ResolvedSoulLink?.CurrentHp ?? -1;
+        ResolvedNetworkSoulLink?.CurrentHp ??
+        (SoullockePartnerLink?.IsFainted == true ? 0 : -1);
 
     public bool LinkedIsFainted => IsSoulLinked &&
-                                   (CurrentHp == 0 || LinkedCurrentHp == 0);
+                                   (CurrentHp == 0 ||
+                                    SoullockePartnerLink?.IsFainted == true ||
+                                    ResolvedNetworkSoulLink?.CurrentHp == 0);
 
     public string NameLine => string.Equals(
         DisplayName,
