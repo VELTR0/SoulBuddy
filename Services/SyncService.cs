@@ -18,7 +18,11 @@ public sealed class SyncService
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SoulLinkPartnerInfo> _partnerLinksByLocation =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (string Species, string? Nickname, string Location)> _pendingSoullockeEntryLogs =
+        new(StringComparer.OrdinalIgnoreCase);
 
+    private SoullockeRun? _ownRun;
+    private bool _ownRunDirty;
     private bool _initialized;
     private bool _firstLiveSnapshotPersisted;
     private bool _partnerSnapshotInitialized;
@@ -68,9 +72,13 @@ public sealed class SyncService
 
             if (_config.SoullockeEnabled)
             {
-                var run = await _soullockeClient.LoadRunAsync(cancellationToken);
-                await PullRemoteEncountersAsync(run, cancellationToken);
+                // The own run is read exactly once. From this point on this in-memory
+                // run is SoulBuddy's source of truth and is only written to Soullocke.
+                _ownRun = await _soullockeClient.LoadRunAsync(cancellationToken);
+                _ownRunDirty = CanonicalizeOwnRunLocations(_ownRun);
+                await PullInitialOwnEncountersAsync(_ownRun, cancellationToken);
 
+                // Partner data is always read-only and may be refreshed continuously.
                 var partnerRun = await _soullockeClient.LoadPartnerRunAsync(cancellationToken);
                 CapturePartnerSnapshot(partnerRun);
             }
@@ -106,7 +114,7 @@ public sealed class SyncService
         }
     }
 
-    private async Task PullRemoteEncountersAsync(
+    private async Task PullInitialOwnEncountersAsync(
         SoullockeRun run,
         CancellationToken cancellationToken)
     {
@@ -134,9 +142,9 @@ public sealed class SyncService
         readTimeout.CancelAfter(TimeSpan.FromSeconds(5));
 
         var slots = await _partySource.ReadAllPokemonAsync(readTimeout.Token);
-        var run = _config.SoullockeEnabled
-            ? await _soullockeClient.LoadRunAsync(cancellationToken)
-            : null;
+        var run = _ownRun;
+
+        // Only the partner run is refreshed from Soullocke after initialization.
         var partnerRun = _config.SoullockeEnabled
             ? await _soullockeClient.LoadPartnerRunAsync(cancellationToken)
             : null;
@@ -146,16 +154,13 @@ public sealed class SyncService
         else if (_config.SoullockeEnabled)
             _partnerLinksByLocation.Clear();
 
-        if (run is not null)
-            await PullRemoteEncountersAsync(run, cancellationToken);
-
-        var runChanged = run is not null && CanonicalizeOwnRunLocations(run);
-        if (run is not null && partnerRun is not null)
-            runChanged |= await ApplyPartnerKnockoutsAsync(run, partnerRun, cancellationToken);
+        if (run is not null && partnerRun is not null &&
+            await ApplyPartnerKnockoutsAsync(run, partnerRun, cancellationToken))
+        {
+            _ownRunDirty = true;
+        }
 
         var processedSpecies = new HashSet<int>();
-        var expectedRemoteEntries = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        var newSoullockeEntries = new List<(string Species, string? Nickname, string Location)>();
 
         foreach (var slot in slots
                      .OrderBy(slot => slot.Box is null ? 0 : 1)
@@ -222,30 +227,33 @@ public sealed class SyncService
                 run.Encounters.Remove(sameSpeciesKey);
                 run.Encounters[displayLocation] = existingEncounter;
                 remoteKey = displayLocation;
-                runChanged = true;
+                _ownRunDirty = true;
             }
-
-            expectedRemoteEntries[remoteKey] = pokemon.Species;
 
             if (!run.Encounters.TryGetValue(remoteKey, out var encounter))
             {
                 encounter = new SoullockeEncounter();
                 run.Encounters[remoteKey] = encounter;
-                runChanged = true;
+                _ownRunDirty = true;
             }
 
             var oldStatus = NormalizeStatus(encounter.Status);
             var gameStatus = pokemon.Hp.Current <= 0
                 ? "fainted"
                 : slot.Box is not null ? "boxed" : "alive";
-            var newStatus = oldStatus is "brofailed" or "notcaught" ? oldStatus : gameStatus;
+
+            // Nuzlocke/SoulLink loss states are terminal. Healing or moving the
+            // Pokémon back into the party must never revive them in Soullocke.
+            var newStatus = oldStatus is "fainted" or "brofailed" or "notcaught"
+                ? oldStatus
+                : gameStatus;
             var nickname = string.IsNullOrWhiteSpace(pokemon.Nickname) ? null : pokemon.Nickname;
 
             if (encounter.Pokemon != pokemon.Species ||
                 !string.Equals(encounter.Nickname, nickname, StringComparison.Ordinal) ||
                 oldStatus != newStatus)
             {
-                runChanged = true;
+                _ownRunDirty = true;
             }
 
             encounter.Pokemon = pokemon.Species;
@@ -253,9 +261,12 @@ public sealed class SyncService
             encounter.Status = newStatus;
 
             if (isNewRemoteEntry)
-                newSoullockeEntries.Add((pokemon.SpeciesName, nickname, displayLocation));
+            {
+                _pendingSoullockeEntryLogs[remoteKey] =
+                    (pokemon.SpeciesName, nickname, displayLocation);
+            }
 
-            if (newStatus is "brofailed" or "notcaught")
+            if (newStatus is "brofailed" or "notcaught" or "fainted")
             {
                 await _knownPokemon.UpsertSoullockeEncounterAsync(
                     mergedId,
@@ -269,8 +280,18 @@ public sealed class SyncService
             await _knownPokemon.MarkSoullockeSyncedAsync(mergedId, cancellationToken);
         }
 
-        if (run is not null && partnerRun is not null)
-            runChanged |= await ApplyPartnerKnockoutsAsync(run, partnerRun, cancellationToken, publishTransitions: false);
+        // Re-apply after local encounters have been merged. This covers the case
+        // where the partner was already fainted before the local linked encounter
+        // first appeared in SoulBuddy.
+        if (run is not null && partnerRun is not null &&
+            await ApplyPartnerKnockoutsAsync(
+                run,
+                partnerRun,
+                cancellationToken,
+                publishTransitions: false))
+        {
+            _ownRunDirty = true;
+        }
 
         var hasFreshCollectorData =
             _partySource is LivePartySource livePartySource &&
@@ -282,27 +303,22 @@ public sealed class SyncService
             hasFreshCollectorData &&
             !_firstLiveSnapshotPersisted;
 
-        if (run is null || (!runChanged && !forceInitialLiveSave))
+        if (run is null || (!_ownRunDirty && !forceInitialLiveSave))
             return;
 
+        // No verification read is performed here by design. Once initialized,
+        // own data flows in one direction only: SoulBuddy -> Soullocke.
         await _soullockeClient.SaveRunAsync(run.Encounters, cancellationToken);
-        var verifiedRun = await _soullockeClient.LoadRunAsync(cancellationToken);
-
-        var missingAfterSave = expectedRemoteEntries.Any(expected =>
-            !verifiedRun.Encounters.TryGetValue(expected.Key, out var saved) ||
-            saved.Pokemon != expected.Value);
-
-        if (missingAfterSave)
-            throw new InvalidOperationException("Soullocke hat nicht alle lokalen Begegnungen bestätigt.");
-
+        _ownRunDirty = false;
         _firstLiveSnapshotPersisted = true;
 
-        foreach (var entry in newSoullockeEntries)
+        foreach (var entry in _pendingSoullockeEntryLogs.Values)
         {
             Console.WriteLine(
                 $"Neuer Pokémon-Eintrag in SoulLocke: {FormatPokemon(entry.Species, entry.Nickname)} " +
                 $"– Fangort: {entry.Location}.");
         }
+        _pendingSoullockeEntryLogs.Clear();
     }
 
     private void CapturePartnerSnapshot(SoullockeRun? partnerRun)
@@ -369,7 +385,8 @@ public sealed class SyncService
                 SoullockeEncounter? ownEncounter = null;
                 KnownPokemonEntry? linkedLocal = null;
 
-                if (ownKey is not null && ownRun.Encounters.TryGetValue(ownKey, out ownEncounter) &&
+                if (ownKey is not null &&
+                    ownRun.Encounters.TryGetValue(ownKey, out ownEncounter) &&
                     ownEncounter.Pokemon > 0)
                 {
                     var ownStatus = NormalizeStatus(ownEncounter.Status);
