@@ -37,14 +37,15 @@ public sealed class OverlayMessageWriter
 
     private static string FormatMessage(NuzlockeRuleEvent ruleEvent)
     {
-        var name = string.IsNullOrWhiteSpace(ruleEvent.Nickname)
-            ? ruleEvent.SpeciesName
-            : $"{ruleEvent.Nickname} ({ruleEvent.SpeciesName})";
+        var name = FormatPokemon(ruleEvent.SpeciesName, ruleEvent.Nickname);
 
         return ruleEvent.Type switch
         {
             NuzlockeRuleEventType.PokemonKnockedOut =>
                 $"{name} ist K.O. gegangen.",
+
+            NuzlockeRuleEventType.PartnerPokemonKnockedOut =>
+                FormatPartnerKnockout(ruleEvent, name),
 
             NuzlockeRuleEventType.CatchableEncounter when ruleEvent.IsShiny && ruleEvent.IsFirstEncounter =>
                 $"{name} ist fangbar: erster Encounter und Shiny.",
@@ -64,6 +65,20 @@ public sealed class OverlayMessageWriter
             _ => $"Nuzlocke-Ereignis: {name}."
         };
     }
+
+    private static string FormatPartnerKnockout(NuzlockeRuleEvent ruleEvent, string partnerPokemonName)
+    {
+        var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
+            ? "Dein verbundenes Pokémon"
+            : FormatPokemon(ruleEvent.LinkedSpeciesName, ruleEvent.LinkedNickname);
+
+        return $"Partner-Pokémon {partnerPokemonName} ist K.O.! {linkedName} muss abgelegt werden.";
+    }
+
+    private static string FormatPokemon(string species, string? nickname) =>
+        string.IsNullOrWhiteSpace(nickname)
+            ? species
+            : $"{nickname} ({species})";
 
     private sealed class OverlayMessage
     {
