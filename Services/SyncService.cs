@@ -39,6 +39,8 @@ public sealed class SyncService
         _config = config;
     }
 
+    public string? PartnerPlayerName => _soullockeClient.PartnerPlayerName;
+
     public bool TryGetPartnerLink(string location, out SoulLinkPartnerInfo? link)
     {
         if (_partnerLinksByLocation.TryGetValue(NormalizeLocation(location), out var found))
