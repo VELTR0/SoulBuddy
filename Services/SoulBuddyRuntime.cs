@@ -128,6 +128,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             knownPokemonStore,
             soullockeClient,
             locationMapper,
+            nuzlockeRuleEventSource,
             config);
         var collectorEventSource = new JsonLineCollectorEventSource(
             eventFilePath,
