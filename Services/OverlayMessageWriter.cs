@@ -37,48 +37,43 @@ public sealed class OverlayMessageWriter
 
     private static string FormatMessage(NuzlockeRuleEvent ruleEvent)
     {
-        var name = FormatPokemon(ruleEvent.SpeciesName, ruleEvent.Nickname);
+        var name = ShortPokemonName(ruleEvent.SpeciesName, ruleEvent.Nickname);
 
         return ruleEvent.Type switch
         {
             NuzlockeRuleEventType.PokemonKnockedOut =>
-                $"{name} ist K.O. gegangen.",
+                $"{name} ist K.O.!",
 
             NuzlockeRuleEventType.PartnerPokemonKnockedOut =>
-                FormatPartnerKnockout(ruleEvent, name),
-
-            NuzlockeRuleEventType.CatchableEncounter when ruleEvent.IsShiny && ruleEvent.IsFirstEncounter =>
-                $"{name} ist fangbar: erster Encounter und Shiny.",
+                FormatPartnerKnockout(ruleEvent),
 
             NuzlockeRuleEventType.CatchableEncounter when ruleEvent.IsShiny =>
-                $"{name} ist als Shiny fangbar.",
+                $"Shiny {name} fangbar!",
 
             NuzlockeRuleEventType.CatchableEncounter =>
-                $"{name} ist der erste Encounter und fangbar.",
+                $"{name} fangbar!",
 
             NuzlockeRuleEventType.CatchSucceeded =>
-                $"{name} wurde gefangen.",
+                $"{name} gefangen!",
 
             NuzlockeRuleEventType.CatchFailed =>
-                $"Der Fang von {name} ist missglückt.",
+                "Fang fehlgeschlagen!",
 
-            _ => $"Nuzlocke-Ereignis: {name}."
+            _ => $"{name}: Nuzlocke-Event"
         };
     }
 
-    private static string FormatPartnerKnockout(NuzlockeRuleEvent ruleEvent, string partnerPokemonName)
+    private static string FormatPartnerKnockout(NuzlockeRuleEvent ruleEvent)
     {
         var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
-            ? "Dein verbundenes Pokémon"
-            : FormatPokemon(ruleEvent.LinkedSpeciesName, ruleEvent.LinkedNickname);
+            ? "Pokemon"
+            : ShortPokemonName(ruleEvent.LinkedSpeciesName, ruleEvent.LinkedNickname);
 
-        return $"Partner-Pokémon {partnerPokemonName} ist K.O.! {linkedName} muss abgelegt werden.";
+        return $"Partner K.O. - {linkedName} raus!";
     }
 
-    private static string FormatPokemon(string species, string? nickname) =>
-        string.IsNullOrWhiteSpace(nickname)
-            ? species
-            : $"{nickname} ({species})";
+    private static string ShortPokemonName(string species, string? nickname) =>
+        string.IsNullOrWhiteSpace(nickname) ? species : nickname!;
 
     private sealed class OverlayMessage
     {
