@@ -210,7 +210,12 @@ public sealed class SoullockeClient
         {
             var internalLocation = NormalizeInternalLocation(pair.Key);
             var apiLocation = ResolveSoullockeLocation(internalLocation, usedPlaceholders);
-            converted[apiLocation] = pair.Value;
+            converted[apiLocation] = new SoullockeEncounter
+            {
+                Pokemon = pair.Value.Pokemon,
+                Nickname = pair.Value.Nickname,
+                Status = ToSoullockeStatus(pair.Value.Status)
+            };
         }
 
         return converted;
@@ -248,6 +253,8 @@ public sealed class SoullockeClient
     {
         foreach (var pair in run.Encounters.ToArray())
         {
+            pair.Value.Status = FromSoullockeStatus(pair.Value.Status);
+
             var internalLocation = ResolveInternalLocationFromSoullocke(pair.Key);
             if (string.Equals(pair.Key, internalLocation, StringComparison.Ordinal))
                 continue;
@@ -278,6 +285,26 @@ public sealed class SoullockeClient
             "Finsterhöhle" or "Dark Cave" or "Placeholder 1" => "Dunkelhöhle",
             "Sprout Tower" or "Placeholder 2" or "" => "Knofensaturm",
             _ => location.Trim()
+        };
+
+    private static string ToSoullockeStatus(string? status) =>
+        (status ?? "alive").Trim().ToLowerInvariant() switch
+        {
+            "fainted" => "fainted",
+            "notcaught" or "not-caught" => "notcaught",
+            "brofailed" or "bro-failed" => "bro-failed",
+            "boxed" or "box" => "boxed",
+            _ => "alive"
+        };
+
+    private static string FromSoullockeStatus(string? status) =>
+        (status ?? "alive").Trim().ToLowerInvariant() switch
+        {
+            "fainted" => "fainted",
+            "notcaught" or "not-caught" => "notcaught",
+            "brofailed" or "bro-failed" => "brofailed",
+            "boxed" or "box" => "boxed",
+            _ => "alive"
         };
 
     private static bool IsDirectSoullockeLocation(string location)
