@@ -11,22 +11,28 @@ public sealed class SyncService
     private readonly SoullockeClient _soullockeClient;
     private readonly KnownPokemonStore _knownPokemon;
     private readonly LocationMapper _locationMapper;
+    private readonly NuzlockeRuleEventSource _ruleEvents;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
+    private readonly Dictionary<string, string> _partnerStatusByLocation =
+        new(StringComparer.OrdinalIgnoreCase);
 
     private bool _initialized;
     private bool _firstLiveSnapshotPersisted;
+    private bool _partnerSnapshotInitialized;
 
     public SyncService(
         IPartySource partySource,
         KnownPokemonStore knownPokemon,
         SoullockeClient soullockeClient,
         LocationMapper locationMapper,
+        NuzlockeRuleEventSource ruleEvents,
         AppConfig config)
     {
         _partySource = partySource;
         _knownPokemon = knownPokemon;
         _soullockeClient = soullockeClient;
         _locationMapper = locationMapper;
+        _ruleEvents = ruleEvents;
         _config = config;
     }
 
@@ -47,6 +53,9 @@ public sealed class SyncService
             {
                 var run = await _soullockeClient.LoadRunAsync(cancellationToken);
                 await PullRemoteEncountersAsync(run, cancellationToken);
+
+                var partnerRun = await _soullockeClient.LoadPartnerRunAsync(cancellationToken);
+                CapturePartnerSnapshot(partnerRun);
             }
 
             _initialized = true;
@@ -111,11 +120,17 @@ public sealed class SyncService
         var run = _config.SoullockeEnabled
             ? await _soullockeClient.LoadRunAsync(cancellationToken)
             : null;
+        var partnerRun = _config.SoullockeEnabled
+            ? await _soullockeClient.LoadPartnerRunAsync(cancellationToken)
+            : null;
 
         if (run is not null)
             await PullRemoteEncountersAsync(run, cancellationToken);
 
         var runChanged = run is not null && CanonicalizeOwnRunLocations(run);
+        if (run is not null && partnerRun is not null)
+            runChanged |= await ApplyPartnerKnockoutsAsync(run, partnerRun, cancellationToken);
+
         var processedSpecies = new HashSet<int>();
         var expectedRemoteEntries = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var newSoullockeEntries = new List<(string Species, string? Nickname, string Location)>();
@@ -232,6 +247,12 @@ public sealed class SyncService
             await _knownPokemon.MarkSoullockeSyncedAsync(mergedId, cancellationToken);
         }
 
+        // A partner may already be fainted before the linked local Pokémon is first
+        // observed in this cycle. Re-apply the SoulLink rule after local encounters
+        // were merged so that the new entry immediately becomes brofailed.
+        if (run is not null && partnerRun is not null)
+            runChanged |= await ApplyPartnerKnockoutsAsync(run, partnerRun, cancellationToken, publishTransitions: false);
+
         var hasFreshCollectorData =
             _partySource is LivePartySource livePartySource &&
             livePartySource.HasReceivedLiveUpdate &&
@@ -263,6 +284,84 @@ public sealed class SyncService
                 $"Neuer Pokémon-Eintrag in SoulLocke: {FormatPokemon(entry.Species, entry.Nickname)} " +
                 $"– Fangort: {entry.Location}.");
         }
+    }
+
+    private void CapturePartnerSnapshot(SoullockeRun? partnerRun)
+    {
+        _partnerStatusByLocation.Clear();
+        if (partnerRun is not null)
+        {
+            foreach (var pair in partnerRun.Encounters)
+                _partnerStatusByLocation[NormalizeLocation(pair.Key)] = NormalizeStatus(pair.Value.Status);
+        }
+
+        _partnerSnapshotInitialized = true;
+    }
+
+    private async Task<bool> ApplyPartnerKnockoutsAsync(
+        SoullockeRun ownRun,
+        SoullockeRun partnerRun,
+        CancellationToken cancellationToken,
+        bool publishTransitions = true)
+    {
+        var changed = false;
+
+        foreach (var pair in partnerRun.Encounters)
+        {
+            var normalizedLocation = NormalizeLocation(pair.Key);
+            var currentStatus = NormalizeStatus(pair.Value.Status);
+            _partnerStatusByLocation.TryGetValue(normalizedLocation, out var previousStatus);
+
+            if (currentStatus == "fainted")
+            {
+                var ownKey = FindLocationKey(ownRun.Encounters, pair.Key);
+                SoullockeEncounter? ownEncounter = null;
+                KnownPokemonEntry? linkedLocal = null;
+
+                if (ownKey is not null && ownRun.Encounters.TryGetValue(ownKey, out ownEncounter) &&
+                    ownEncounter.Pokemon > 0)
+                {
+                    var ownStatus = NormalizeStatus(ownEncounter.Status);
+                    if (ownStatus is not "fainted" and not "notcaught" and not "brofailed")
+                    {
+                        ownEncounter.Status = "brofailed";
+                        changed = true;
+                    }
+
+                    linkedLocal = await _knownPokemon.FindBySpeciesAsync(
+                        ownEncounter.Pokemon,
+                        cancellationToken);
+
+                    await _knownPokemon.UpsertSoullockeEncounterAsync(
+                        linkedLocal?.UniqueId ?? $"soullocke:{_config.PlayerId}:{ownKey}",
+                        ownEncounter.Pokemon,
+                        ownEncounter.Nickname,
+                        ownKey,
+                        "brofailed",
+                        cancellationToken);
+                }
+
+                var isTransition = _partnerSnapshotInitialized && previousStatus != "fainted";
+                if (publishTransitions && isTransition)
+                {
+                    var partnerSpeciesName = $"Pokémon #{pair.Value.Pokemon}";
+                    _ruleEvents.PublishPartnerPokemonKnockedOut(
+                        _soullockeClient.PartnerPlayerName ?? "Partner",
+                        pair.Value.Pokemon,
+                        partnerSpeciesName,
+                        pair.Value.Nickname,
+                        ToDisplayLocation(pair.Key),
+                        ownEncounter?.Pokemon,
+                        linkedLocal?.Species,
+                        ownEncounter?.Nickname ?? linkedLocal?.Nickname);
+                }
+            }
+
+            _partnerStatusByLocation[normalizedLocation] = currentStatus;
+        }
+
+        _partnerSnapshotInitialized = true;
+        return changed;
     }
 
     private static bool CanonicalizeOwnRunLocations(SoullockeRun run)
