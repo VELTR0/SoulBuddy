@@ -269,9 +269,6 @@ public sealed class SyncService
             await _knownPokemon.MarkSoullockeSyncedAsync(mergedId, cancellationToken);
         }
 
-        // A partner may already be fainted before the linked local Pokémon is first
-        // observed in this cycle. Re-apply the SoulLink rule after local encounters
-        // were merged so that the new entry immediately becomes brofailed.
         if (run is not null && partnerRun is not null)
             runChanged |= await ApplyPartnerKnockoutsAsync(run, partnerRun, cancellationToken, publishTransitions: false);
 
@@ -467,8 +464,22 @@ public sealed class SyncService
             key => NormalizeLocation(key) == normalized);
     }
 
-    private static string NormalizeLocation(string value) =>
-        new(value.Trim().ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+    private static string NormalizeLocation(string value)
+    {
+        var normalized = new string(value
+            .Trim()
+            .ToLowerInvariant()
+            .Where(char.IsLetterOrDigit)
+            .ToArray());
+
+        return normalized switch
+        {
+            "finsterhöhle" or "dunkelhöhle" or "darkcave" or "placeholder1" => "darkcave",
+            "knofensaturm" or "sprouttower" or "placeholder2" => "sprouttower",
+            "newborkia" or "newbarktown" or "starter" => "starter",
+            _ => normalized
+        };
+    }
 
     private static string NormalizeStatus(string? status) =>
         (status ?? "alive").Trim().ToLowerInvariant() switch
