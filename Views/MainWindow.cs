@@ -5,6 +5,7 @@ using Avalonia.Data;
 using Avalonia.Layout;
 using Avalonia.Media;
 using SoulBuddy.Models;
+using SoulBuddy.Services;
 using SoulBuddy.ViewModels;
 
 namespace SoulBuddy.Views;
