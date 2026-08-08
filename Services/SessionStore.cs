@@ -25,9 +25,8 @@ public sealed class SessionStore
 
     public async Task<SessionContext> StartAsync(
         string playerName,
-        bool soullockeEnabled = false,
-        string soullockeLink = "",
-        string soullockePassword = "",
+        string soullockeLink,
+        string soullockePassword,
         CancellationToken cancellationToken = default)
     {
         ValidatePlayerName(playerName);
@@ -59,7 +58,6 @@ public sealed class SessionStore
         await SaveSessionAsync(session, cancellationToken);
         await SaveActiveSessionAsync(
             localPlayer.Id,
-            soullockeEnabled,
             soullockeLink,
             soullockePassword,
             cancellationToken);
@@ -69,9 +67,9 @@ public sealed class SessionStore
             Session = session,
             LocalPlayer = localPlayer,
             LaunchMode = SessionLaunchMode.Auto,
-            SoullockeEnabled = soullockeEnabled,
-            SoullockeLink = soullockeEnabled ? soullockeLink.Trim() : string.Empty,
-            SoullockePassword = soullockeEnabled ? soullockePassword : string.Empty
+            SoullockeEnabled = true,
+            SoullockeLink = soullockeLink.Trim(),
+            SoullockePassword = soullockePassword
         };
     }
 
@@ -79,9 +77,7 @@ public sealed class SessionStore
         CancellationToken cancellationToken = default)
     {
         if (!File.Exists(_activeSessionPath))
-        {
             return null;
-        }
 
         await using var activeStream = File.OpenRead(_activeSessionPath);
         var active = await JsonSerializer.DeserializeAsync<ActiveSession>(
@@ -90,36 +86,29 @@ public sealed class SessionStore
             cancellationToken);
 
         if (active is null)
-        {
             return null;
-        }
 
         var session = await LoadSessionAsync(cancellationToken);
         var player = session?.Players.FirstOrDefault(item => item.Id == active.PlayerId);
 
         if (session is null || player is null)
-        {
             return null;
-        }
 
         return new SessionContext
         {
             Session = session,
             LocalPlayer = player,
             LaunchMode = SessionLaunchMode.Auto,
-            SoullockeEnabled = active.SoullockeEnabled,
+            SoullockeEnabled = true,
             SoullockeLink = active.SoullockeLink,
             SoullockePassword = active.SoullockePassword
         };
     }
 
-    private async Task<SoulLinkSession?> LoadSessionAsync(
-        CancellationToken cancellationToken)
+    private async Task<SoulLinkSession?> LoadSessionAsync(CancellationToken cancellationToken)
     {
         if (!File.Exists(_sessionPath))
-        {
             return null;
-        }
 
         await using var stream = File.OpenRead(_sessionPath);
         return await JsonSerializer.DeserializeAsync<SoulLinkSession>(
@@ -128,9 +117,7 @@ public sealed class SessionStore
             cancellationToken);
     }
 
-    private async Task SaveSessionAsync(
-        SoulLinkSession session,
-        CancellationToken cancellationToken)
+    private async Task SaveSessionAsync(SoulLinkSession session, CancellationToken cancellationToken)
     {
         var json = JsonSerializer.Serialize(session, JsonOptions);
         await WriteAtomicallyAsync(_sessionPath, json, cancellationToken);
@@ -138,7 +125,6 @@ public sealed class SessionStore
 
     private async Task SaveActiveSessionAsync(
         string playerId,
-        bool soullockeEnabled,
         string soullockeLink,
         string soullockePassword,
         CancellationToken cancellationToken)
@@ -146,9 +132,9 @@ public sealed class SessionStore
         var active = new ActiveSession
         {
             PlayerId = playerId,
-            SoullockeEnabled = soullockeEnabled,
-            SoullockeLink = soullockeEnabled ? soullockeLink.Trim() : string.Empty,
-            SoullockePassword = soullockeEnabled ? soullockePassword : string.Empty
+            SoullockeEnabled = true,
+            SoullockeLink = soullockeLink.Trim(),
+            SoullockePassword = soullockePassword
         };
         var json = JsonSerializer.Serialize(active, JsonOptions);
         await WriteAtomicallyAsync(_activeSessionPath, json, cancellationToken);
@@ -157,9 +143,7 @@ public sealed class SessionStore
     private static void ValidatePlayerName(string playerName)
     {
         if (string.IsNullOrWhiteSpace(playerName))
-        {
             throw new ArgumentException("Bitte gib einen Spielernamen ein.", nameof(playerName));
-        }
     }
 
     private static async Task WriteAtomicallyAsync(
