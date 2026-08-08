@@ -129,8 +129,7 @@ public sealed class SessionSetupWindow : Window
             var password = _soullockePasswordBox.Text ?? string.Empty;
 
             ValidateSoullockeInput(link, password);
-
-            SoullockeLaunchSettings.Configure(true, link, password, playerName);
+            SoullockeLaunchSettings.Configure(link, password, playerName);
 
             var context = await _sessionStore.StartAsync(
                 playerName,
@@ -152,7 +151,6 @@ public sealed class SessionSetupWindow : Window
                 _activeContext.SoullockePassword);
 
             SoullockeLaunchSettings.Configure(
-                true,
                 _activeContext.SoullockeLink,
                 _activeContext.SoullockePassword,
                 _activeContext.LocalPlayer.DisplayName);
