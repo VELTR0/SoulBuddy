@@ -1,5 +1,4 @@
 using SoulBuddy.Models;
-using SoulBuddy.Services;
 
 namespace SoulBuddy.ViewModels;
 
@@ -21,54 +20,22 @@ public sealed class PokemonCardViewModel
     public bool IsShiny { get; init; }
     public SoulLinkPartnerInfo? SoullockePartnerLink { get; init; }
 
-    private NetworkPokemonSnapshot? ResolvedNetworkSoulLink
-    {
-        get
-        {
-            var network = SoulBuddyNetworkService.Current;
-            if (network?.State != SoulBuddyNetworkState.Connected)
-                return null;
-
-            var remoteParty = network.LatestRemoteSnapshot?.Party;
-            if (remoteParty is null || remoteParty.Count == 0)
-                return null;
-
-            var location = NormalizeLocation(Subtitle);
-            if (location.Length == 0)
-                return null;
-
-            return remoteParty.FirstOrDefault(remote =>
-                NormalizeLocation(remote.Location) == location);
-        }
-    }
-
-    public bool IsSoulLinked =>
-        SoullockePartnerLink is not null ||
-        ResolvedNetworkSoulLink is not null;
+    public bool IsSoulLinked => SoullockePartnerLink is not null;
 
     public string LinkedDisplayName =>
-        SoullockePartnerLink?.DisplayName ??
-        ResolvedNetworkSoulLink?.DisplayName ??
-        string.Empty;
+        SoullockePartnerLink?.DisplayName ?? string.Empty;
 
     public string LinkedSpecies =>
-        SoullockePartnerLink is not null
-            ? $"Pokémon #{SoullockePartnerLink.SpeciesId}"
-            : ResolvedNetworkSoulLink?.SpeciesName ?? string.Empty;
+        SoullockePartnerLink is null
+            ? string.Empty
+            : $"Pokémon #{SoullockePartnerLink.SpeciesId}";
 
-    public int LinkedSpeciesId =>
-        SoullockePartnerLink?.SpeciesId ??
-        ResolvedNetworkSoulLink?.SpeciesId ??
-        0;
+    public int LinkedSpeciesId => SoullockePartnerLink?.SpeciesId ?? 0;
 
-    public int LinkedCurrentHp =>
-        ResolvedNetworkSoulLink?.CurrentHp ??
-        (SoullockePartnerLink?.IsFainted == true ? 0 : -1);
+    public int LinkedCurrentHp => SoullockePartnerLink?.IsFainted == true ? 0 : -1;
 
     public bool LinkedIsFainted => IsSoulLinked &&
-                                   (CurrentHp == 0 ||
-                                    SoullockePartnerLink?.IsFainted == true ||
-                                    ResolvedNetworkSoulLink?.CurrentHp == 0);
+                                   (CurrentHp == 0 || SoullockePartnerLink?.IsFainted == true);
 
     public string NameLine => string.Equals(
         DisplayName,
@@ -110,20 +77,4 @@ public sealed class PokemonCardViewModel
     public double HpPercentage => MaxHp <= 0
         ? 0
         : Math.Clamp(CurrentHp * 100d / MaxHp, 0, 100);
-
-    private static string NormalizeLocation(string value)
-    {
-        var normalized = Normalize(value);
-        return normalized switch
-        {
-            "starter" or "newborkia" or "newbarktown" => "starter",
-            _ => normalized
-        };
-    }
-
-    private static string Normalize(string value) => new(value
-        .Trim()
-        .ToLowerInvariant()
-        .Where(char.IsLetterOrDigit)
-        .ToArray());
 }
