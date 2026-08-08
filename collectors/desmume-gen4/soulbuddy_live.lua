@@ -418,12 +418,13 @@ local function draw_overlay_messages()
 
     local text = active_overlay_message.message
 
-    -- Lower edge area of the upper DS screen.
+    -- DeSmuME uses negative Y coordinates for the upper DS screen.
+    -- Keep the message near the lower edge of that upper screen.
     if gui.box ~= nil then
-        gui.box(28, 142, 228, 164, "black", "white")
+        gui.box(28, -30, 228, -8, "black", "white")
     end
 
-    gui.text(42, 150, text, "white", "black")
+    gui.text(42, -22, text, "white", "black")
 end
 
 if gui ~= nil and gui.register ~= nil then
