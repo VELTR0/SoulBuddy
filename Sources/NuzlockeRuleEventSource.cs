@@ -55,13 +55,17 @@ public sealed class NuzlockeRuleEventSource
 
             if (isNewBattle)
             {
-                var locationId = opponent.LocationMet > 0
-                    ? opponent.LocationMet
-                    : state.LocationId;
-                var locationName = ResolveLocationName(locationId, state.LocationName);
-                var locationKey = locationId is > 0
-                    ? $"id:{locationId.Value}"
-                    : $"name:{locationName}";
+                // The opponent's LocationMet is Pokémon metadata, not the current
+                // HGSS field location. Feeding it into LocationMapper can turn a
+                // wild Johto encounter into a Sinnoh route (for example Route 221).
+                // The collector already provides the canonical current HGSS area.
+                var locationId = state.LocationId;
+                var locationName = ResolveLiveLocationName(state.LocationName, locationId);
+                var locationKey = !IsUnknownLiveLocation(locationName)
+                    ? $"name:{NormalizeEncounterLocation(locationName)}"
+                    : locationId is > 0
+                        ? $"live-id:{locationId.Value}"
+                        : "unknown";
                 var isFirstEncounter = _encounteredLocations.Add(locationKey);
                 var isCatchable = isFirstEncounter || opponent.IsShiny;
 
@@ -138,9 +142,7 @@ public sealed class NuzlockeRuleEventSource
                              pokemon.Pid != 0 &&
                              _activeEncounter.Pokemon.Pid == pokemon.Pid;
             var fallbackMatches = _activeEncounter.Pokemon.Pid == 0 &&
-                                  pokemon.Species == _activeEncounter.Pokemon.SpeciesId &&
-                                  (_activeEncounter.LocationId is null ||
-                                   pokemon.LocationMet == _activeEncounter.LocationId);
+                                  pokemon.Species == _activeEncounter.Pokemon.SpeciesId;
 
             if (!pidMatches && !fallbackMatches)
                 continue;
@@ -187,17 +189,28 @@ public sealed class NuzlockeRuleEventSource
         });
     }
 
-    private string ResolveLocationName(int? locationId, string stateLocationName)
+    private static string ResolveLiveLocationName(string stateLocationName, int? locationId)
     {
-        if (locationId is > 0)
-            return _locationMapper.GetLocationName(locationId.Value)
-                   ?? $"Unbekannter Fangort ({locationId.Value})";
+        if (!string.IsNullOrWhiteSpace(stateLocationName) &&
+            !stateLocationName.Contains("pending", StringComparison.OrdinalIgnoreCase))
+        {
+            return stateLocationName.Trim();
+        }
 
-        return string.IsNullOrWhiteSpace(stateLocationName) ||
-               stateLocationName.Contains("pending", StringComparison.OrdinalIgnoreCase)
-            ? "Unbekannter Ort"
-            : stateLocationName.Trim();
+        return locationId is > 0
+            ? $"Unbekannter Ort ({locationId.Value})"
+            : "Unbekannter Ort";
     }
+
+    private static bool IsUnknownLiveLocation(string locationName) =>
+        locationName.StartsWith("Unbekannter Ort", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeEncounterLocation(string value) =>
+        new(value
+            .Trim()
+            .ToLowerInvariant()
+            .Where(char.IsLetterOrDigit)
+            .ToArray());
 
     private void Publish(NuzlockeRuleEvent ruleEvent)
     {
