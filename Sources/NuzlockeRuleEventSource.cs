@@ -22,7 +22,7 @@ public sealed class NuzlockeRuleEventSource
     {
         if (_wasInBattle && !state.InBattle && _activeEncounter is not null)
         {
-            if (!_activeEncounter.WasCaught)
+            if (_activeEncounter.IsCatchable && !_activeEncounter.WasCaught)
             {
                 Publish(new NuzlockeRuleEvent
                 {
