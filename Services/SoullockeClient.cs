@@ -40,6 +40,7 @@ public sealed class SoullockeClient
     }
 
     public string? PartnerPlayerName => _partnerPlayerName;
+    public string SessionGameName => _sessionGameName;
 
     /// <summary>
     /// Loads the local player's run from Soullocke. SoulBuddy calls this exactly once
