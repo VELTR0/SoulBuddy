@@ -26,7 +26,7 @@ public sealed class OverlayMessageWriter
         var line = JsonSerializer.Serialize(new OverlayMessage
         {
             Message = message,
-            DurationSeconds = 12
+            DurationSeconds = 7
         }, JsonOptions);
 
         lock (_sync)
