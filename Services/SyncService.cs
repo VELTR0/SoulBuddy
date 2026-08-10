@@ -20,6 +20,7 @@ public sealed class SyncService
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (string Species, string? Nickname, string Location)> _pendingSoullockeEntryLogs =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentQueue<NuzlockeRuleEvent> _pendingCatchOutcomes = new();
 
     private SoullockeRun? _ownRun;
     private bool _ownRunDirty;
@@ -41,6 +42,7 @@ public sealed class SyncService
         _locationMapper = locationMapper;
         _ruleEvents = ruleEvents;
         _config = config;
+        _ruleEvents.EventOccurred += OnRuleEventOccurred;
     }
 
     public string? PartnerPlayerName => _soullockeClient.PartnerPlayerName;
@@ -143,6 +145,11 @@ public sealed class SyncService
 
         var slots = await _partySource.ReadAllPokemonAsync(readTimeout.Token);
         var run = _ownRun;
+
+        // Catch results are authoritative for Nuzlocke encounter completion.
+        // Persist them before the normal party/box merge so even failed catches,
+        // which can never appear in party memory, are kept in SoulBuddy/Soullocke.
+        await ApplyPendingCatchOutcomesAsync(run, cancellationToken);
 
         // Only the partner run is refreshed from Soullocke after initialization.
         var partnerRun = _config.SoullockeEnabled
@@ -319,6 +326,101 @@ public sealed class SyncService
                 $"– Fangort: {entry.Location}.");
         }
         _pendingSoullockeEntryLogs.Clear();
+    }
+
+    private void OnRuleEventOccurred(object? sender, NuzlockeRuleEvent ruleEvent)
+    {
+        if (ruleEvent.Type is NuzlockeRuleEventType.CatchSucceeded or NuzlockeRuleEventType.CatchFailed)
+            _pendingCatchOutcomes.Enqueue(ruleEvent);
+    }
+
+    private async Task ApplyPendingCatchOutcomesAsync(
+        SoullockeRun? run,
+        CancellationToken cancellationToken)
+    {
+        while (_pendingCatchOutcomes.TryDequeue(out var ruleEvent))
+        {
+            if (ruleEvent.SpeciesId <= 0)
+                continue;
+
+            var status = ruleEvent.Type == NuzlockeRuleEventType.CatchFailed
+                ? "notcaught"
+                : "alive";
+            var nickname = string.IsNullOrWhiteSpace(ruleEvent.Nickname)
+                ? null
+                : ruleEvent.Nickname;
+            var displayLocation = string.IsNullOrWhiteSpace(ruleEvent.LocationName)
+                ? ruleEvent.LocationId is > 0
+                    ? _locationMapper.GetLocationName(ruleEvent.LocationId.Value)
+                      ?? $"Unbekannter Fangort ({ruleEvent.LocationId.Value})"
+                    : "Unbekannter Ort"
+                : ToDisplayLocation(ruleEvent.LocationName);
+            var outcomeId = ruleEvent.Pid != 0
+                ? $"encounter:{ruleEvent.Pid}"
+                : $"encounter:{_config.PlayerId}:{NormalizeLocation(displayLocation)}:{ruleEvent.SpeciesId}";
+
+            // Create the encounter even for a failed catch. Merge a lightweight
+            // game-shaped record immediately afterwards so SoulBuddy can show the
+            // real species name instead of only "Pokémon #<id>".
+            await _knownPokemon.UpsertSoullockeEncounterAsync(
+                outcomeId,
+                ruleEvent.SpeciesId,
+                nickname,
+                displayLocation,
+                status,
+                cancellationToken);
+
+            var mergedId = await _knownPokemon.MergeGamePokemonAsync(
+                outcomeId,
+                new KnownPokemonEntry
+                {
+                    UniqueId = outcomeId,
+                    SpeciesId = ruleEvent.SpeciesId,
+                    Species = ruleEvent.SpeciesName,
+                    Nickname = nickname,
+                    Pid = ruleEvent.Pid,
+                    Location = displayLocation,
+                    LocationId = ruleEvent.LocationId ?? 0,
+                    CurrentHp = 1,
+                    MaxHp = 1,
+                    EncounterStatus = status
+                },
+                inBox: false,
+                cancellationToken);
+
+            if (run is null)
+                continue;
+
+            var existingKey = FindLocationKey(run.Encounters, displayLocation);
+            var remoteKey = existingKey ?? displayLocation;
+            var isNewRemoteEntry = existingKey is null;
+
+            if (!run.Encounters.TryGetValue(remoteKey, out var encounter))
+            {
+                encounter = new SoullockeEncounter();
+                run.Encounters[remoteKey] = encounter;
+            }
+
+            var oldStatus = NormalizeStatus(encounter.Status);
+            if (encounter.Pokemon != ruleEvent.SpeciesId ||
+                !string.Equals(encounter.Nickname, nickname, StringComparison.Ordinal) ||
+                oldStatus != status)
+            {
+                _ownRunDirty = true;
+            }
+
+            encounter.Pokemon = ruleEvent.SpeciesId;
+            encounter.Nickname = nickname;
+            encounter.Status = status;
+
+            if (isNewRemoteEntry)
+            {
+                _pendingSoullockeEntryLogs[remoteKey] =
+                    (ruleEvent.SpeciesName, nickname, displayLocation);
+            }
+
+            await _knownPokemon.MarkSoullockeSyncedAsync(mergedId, cancellationToken);
+        }
     }
 
     private void CapturePartnerSnapshot(SoullockeRun? partnerRun)
