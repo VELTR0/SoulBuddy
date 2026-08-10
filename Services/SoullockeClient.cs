@@ -31,6 +31,7 @@ public sealed class SoullockeClient
     private int _localRunNumber;
     private string _localRunStatus = "open";
     private bool _localRunMetadataInitialized;
+    private bool _loadedLocalRunRequiresStatusRepair;
     private bool _initialized;
 
     public SoullockeClient(HttpClient httpClient, AppConfig config)
@@ -65,8 +66,13 @@ public sealed class SoullockeClient
         // were then mapped to Sinnoh routes 201-230, creating hidden ghost entries
         // such as "Route 221" in an otherwise valid HGSS Soullocke run. Those route
         // numbers cannot exist in HeartGold/SoulSilver, so they are safe to purge.
-        if (RemoveLegacyInvalidHgssRoutes(run))
+        var needsRepairSave = RemoveLegacyInvalidHgssRoutes(run) ||
+                              _loadedLocalRunRequiresStatusRepair;
+        if (needsRepairSave)
+        {
             await SaveLocalRunAsync(run.Encounters, cancellationToken);
+            _loadedLocalRunRequiresStatusRepair = false;
+        }
 
         return run;
     }
@@ -137,7 +143,22 @@ public sealed class SoullockeClient
             ?? throw new InvalidOperationException("Soullocke hat ungültige Run-Daten zurückgegeben.");
 
         if (result.TryGetValue(playerId, out var run))
+        {
+            if (string.Equals(playerId, _config.PlayerId, StringComparison.OrdinalIgnoreCase) &&
+                run.Encounters.Values.Any(encounter =>
+                    string.Equals(
+                        encounter.Status?.Trim(),
+                        "not-caught",
+                        StringComparison.OrdinalIgnoreCase)))
+            {
+                // SoulBuddy briefly emitted "not-caught". Soullocke's UI expects
+                // "notcaught", so remember to rewrite the local player's run after
+                // normalization once LoadRunAsync has initialized the run metadata.
+                _loadedLocalRunRequiresStatusRepair = true;
+            }
+
             NormalizeLoadedEncounterKeys(run);
+        }
 
         return result;
     }
@@ -330,7 +351,7 @@ public sealed class SoullockeClient
         (status ?? "alive").Trim().ToLowerInvariant() switch
         {
             "fainted" => "fainted",
-            "notcaught" or "not-caught" => "not-caught",
+            "notcaught" or "not-caught" => "notcaught",
             "brofailed" or "bro-failed" => "bro-failed",
             "boxed" or "box" => "boxed",
             _ => "alive"
