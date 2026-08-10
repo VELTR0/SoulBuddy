@@ -291,7 +291,7 @@ public sealed class SoullockeClient
         (status ?? "alive").Trim().ToLowerInvariant() switch
         {
             "fainted" => "fainted",
-            "notcaught" or "not-caught" => "notcaught",
+            "notcaught" or "not-caught" => "not-caught",
             "brofailed" or "bro-failed" => "bro-failed",
             "boxed" or "box" => "boxed",
             _ => "alive"
