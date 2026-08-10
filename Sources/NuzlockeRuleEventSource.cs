@@ -5,10 +5,14 @@ namespace SoulBuddy.Sources;
 
 public sealed class NuzlockeRuleEventSource
 {
+    private static readonly TimeSpan CatchResolutionGracePeriod = TimeSpan.FromSeconds(2);
+
     private readonly LocationMapper _locationMapper;
     private readonly Dictionary<long, int> _lastHpByPid = [];
     private readonly HashSet<string> _encounteredLocations = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _catchSync = new();
     private ActiveCatchEncounter? _activeEncounter;
+    private CancellationTokenSource? _pendingCatchFailure;
     private bool _wasInBattle;
 
     public NuzlockeRuleEventSource(LocationMapper locationMapper)
@@ -20,82 +24,107 @@ public sealed class NuzlockeRuleEventSource
 
     public void ObservePlayerState(PlayerLiveState state)
     {
-        if (_wasInBattle && !state.InBattle && _activeEncounter is not null)
+        ActiveCatchEncounter? encounterToResolve = null;
+        NuzlockeRuleEvent? previousEncounterFailure = null;
+        NuzlockeRuleEvent? catchableEncounterEvent = null;
+
+        lock (_catchSync)
         {
-            if (_activeEncounter.IsCatchable && !_activeEncounter.WasCaught)
+            if (_wasInBattle && !state.InBattle && _activeEncounter is not null)
             {
-                Publish(new NuzlockeRuleEvent
+                if (_activeEncounter.IsCatchable && !_activeEncounter.WasCaught)
                 {
-                    Type = NuzlockeRuleEventType.CatchFailed,
-                    OccurredAt = DateTimeOffset.Now,
-                    SpeciesId = _activeEncounter.Pokemon.SpeciesId,
-                    SpeciesName = _activeEncounter.Pokemon.SpeciesName,
-                    Nickname = _activeEncounter.Pokemon.Nickname,
-                    LocationName = _activeEncounter.LocationName,
-                    LocationId = _activeEncounter.LocationId,
-                    Pid = _activeEncounter.Pokemon.Pid,
-                    IsShiny = _activeEncounter.Pokemon.IsShiny,
-                    IsFirstEncounter = _activeEncounter.IsFirstEncounter
-                });
-            }
-
-            _activeEncounter = null;
-        }
-
-        if (state.InBattle &&
-            string.Equals(state.BattleKind, "wild", StringComparison.OrdinalIgnoreCase) &&
-            state.Opponent is not null &&
-            state.Opponent.SpeciesId > 0)
-        {
-            var opponent = state.Opponent;
-            var isNewBattle = _activeEncounter is null ||
-                              (_activeEncounter.Pokemon.Pid != 0 &&
-                               opponent.Pid != 0 &&
-                               _activeEncounter.Pokemon.Pid != opponent.Pid);
-
-            if (isNewBattle)
-            {
-                // The opponent's LocationMet is Pokémon metadata, not the current
-                // HGSS field location. Feeding it into LocationMapper can turn a
-                // wild Johto encounter into a Sinnoh route (for example Route 221).
-                // The collector already provides the canonical current HGSS area.
-                var locationId = state.LocationId;
-                var locationName = ResolveLiveLocationName(state.LocationName, locationId);
-                var locationKey = !IsUnknownLiveLocation(locationName)
-                    ? $"name:{NormalizeEncounterLocation(locationName)}"
-                    : locationId is > 0
-                        ? $"live-id:{locationId.Value}"
-                        : "unknown";
-                var isFirstEncounter = _encounteredLocations.Add(locationKey);
-                var isCatchable = isFirstEncounter || opponent.IsShiny;
-
-                _activeEncounter = new ActiveCatchEncounter(
-                    opponent,
-                    locationName,
-                    locationId,
-                    isFirstEncounter,
-                    isCatchable);
-
-                if (isCatchable)
+                    // HGSS can report the field state before the collector's next
+                    // party/box refresh contains the freshly caught Pokemon. Keep the
+                    // encounter alive briefly so that update can win over CatchFailed.
+                    _activeEncounter.BattleEnded = true;
+                    encounterToResolve = _activeEncounter;
+                }
+                else
                 {
-                    Publish(new NuzlockeRuleEvent
-                    {
-                        Type = NuzlockeRuleEventType.CatchableEncounter,
-                        OccurredAt = DateTimeOffset.Now,
-                        SpeciesId = opponent.SpeciesId,
-                        SpeciesName = opponent.SpeciesName,
-                        Nickname = opponent.Nickname,
-                        LocationName = locationName,
-                        LocationId = locationId,
-                        Pid = opponent.Pid,
-                        IsShiny = opponent.IsShiny,
-                        IsFirstEncounter = isFirstEncounter
-                    });
+                    CancelPendingCatchFailureLocked();
+                    _activeEncounter = null;
                 }
             }
+
+            if (state.InBattle &&
+                string.Equals(state.BattleKind, "wild", StringComparison.OrdinalIgnoreCase) &&
+                state.Opponent is not null &&
+                state.Opponent.SpeciesId > 0)
+            {
+                var opponent = state.Opponent;
+                var isNewBattle = _activeEncounter is null ||
+                                  (_activeEncounter.Pokemon.Pid != 0 &&
+                                   opponent.Pid != 0 &&
+                                   _activeEncounter.Pokemon.Pid != opponent.Pid);
+
+                if (isNewBattle)
+                {
+                    // Starting another battle is definitive evidence that an older,
+                    // already-ended pending encounter was not caught.
+                    if (_activeEncounter is
+                        {
+                            BattleEnded: true,
+                            IsCatchable: true,
+                            WasCaught: false
+                        } pendingEncounter)
+                    {
+                        previousEncounterFailure = CreateCatchFailedEvent(pendingEncounter);
+                        CancelPendingCatchFailureLocked();
+                        _activeEncounter = null;
+                    }
+
+                    // The opponent's LocationMet is Pokémon metadata, not the current
+                    // HGSS field location. Feeding it into LocationMapper can turn a
+                    // wild Johto encounter into a Sinnoh route (for example Route 221).
+                    // The collector already provides the canonical current HGSS area.
+                    var locationId = state.LocationId;
+                    var locationName = ResolveLiveLocationName(state.LocationName, locationId);
+                    var locationKey = !IsUnknownLiveLocation(locationName)
+                        ? $"name:{NormalizeEncounterLocation(locationName)}"
+                        : locationId is > 0
+                            ? $"live-id:{locationId.Value}"
+                            : "unknown";
+                    var isFirstEncounter = _encounteredLocations.Add(locationKey);
+                    var isCatchable = isFirstEncounter || opponent.IsShiny;
+
+                    _activeEncounter = new ActiveCatchEncounter(
+                        opponent,
+                        locationName,
+                        locationId,
+                        isFirstEncounter,
+                        isCatchable);
+
+                    if (isCatchable)
+                    {
+                        catchableEncounterEvent = new NuzlockeRuleEvent
+                        {
+                            Type = NuzlockeRuleEventType.CatchableEncounter,
+                            OccurredAt = DateTimeOffset.Now,
+                            SpeciesId = opponent.SpeciesId,
+                            SpeciesName = opponent.SpeciesName,
+                            Nickname = opponent.Nickname,
+                            LocationName = locationName,
+                            LocationId = locationId,
+                            Pid = opponent.Pid,
+                            IsShiny = opponent.IsShiny,
+                            IsFirstEncounter = isFirstEncounter
+                        };
+                    }
+                }
+            }
+
+            _wasInBattle = state.InBattle;
         }
 
-        _wasInBattle = state.InBattle;
+        if (previousEncounterFailure is not null)
+            Publish(previousEncounterFailure);
+
+        if (encounterToResolve is not null)
+            ScheduleCatchFailure(encounterToResolve);
+
+        if (catchableEncounterEvent is not null)
+            Publish(catchableEncounterEvent);
     }
 
     public void ObservePokemonUpdate(IEnumerable<PartySlot> slots)
@@ -131,36 +160,9 @@ public sealed class NuzlockeRuleEventSource
 
             _lastHpByPid[identity] = pokemon.Hp.Current;
 
-            if (_activeEncounter is null ||
-                !_activeEncounter.IsCatchable ||
-                _activeEncounter.WasCaught)
-            {
-                continue;
-            }
-
-            var pidMatches = _activeEncounter.Pokemon.Pid != 0 &&
-                             pokemon.Pid != 0 &&
-                             _activeEncounter.Pokemon.Pid == pokemon.Pid;
-            var fallbackMatches = _activeEncounter.Pokemon.Pid == 0 &&
-                                  pokemon.Species == _activeEncounter.Pokemon.SpeciesId;
-
-            if (!pidMatches && !fallbackMatches)
-                continue;
-
-            _activeEncounter.WasCaught = true;
-            Publish(new NuzlockeRuleEvent
-            {
-                Type = NuzlockeRuleEventType.CatchSucceeded,
-                OccurredAt = DateTimeOffset.Now,
-                SpeciesId = pokemon.Species,
-                SpeciesName = pokemon.SpeciesName,
-                Nickname = pokemon.Nickname,
-                LocationName = _activeEncounter.LocationName,
-                LocationId = _activeEncounter.LocationId,
-                Pid = pokemon.Pid,
-                IsShiny = pokemon.IsShiny,
-                IsFirstEncounter = _activeEncounter.IsFirstEncounter
-            });
+            var catchSucceededEvent = TryResolveCaughtPokemon(pokemon);
+            if (catchSucceededEvent is not null)
+                Publish(catchSucceededEvent);
         }
     }
 
@@ -188,6 +190,126 @@ public sealed class NuzlockeRuleEventSource
             LinkedNickname = linkedNickname
         });
     }
+
+    private NuzlockeRuleEvent? TryResolveCaughtPokemon(PartyPokemon pokemon)
+    {
+        lock (_catchSync)
+        {
+            if (_activeEncounter is null ||
+                !_activeEncounter.IsCatchable ||
+                _activeEncounter.WasCaught)
+            {
+                return null;
+            }
+
+            var pidMatches = _activeEncounter.Pokemon.Pid != 0 &&
+                             pokemon.Pid != 0 &&
+                             _activeEncounter.Pokemon.Pid == pokemon.Pid;
+            var fallbackMatches = _activeEncounter.Pokemon.Pid == 0 &&
+                                  pokemon.Species == _activeEncounter.Pokemon.SpeciesId;
+
+            if (!pidMatches && !fallbackMatches)
+                return null;
+
+            var encounter = _activeEncounter;
+            encounter.WasCaught = true;
+            CancelPendingCatchFailureLocked();
+            _activeEncounter = null;
+
+            return new NuzlockeRuleEvent
+            {
+                Type = NuzlockeRuleEventType.CatchSucceeded,
+                OccurredAt = DateTimeOffset.Now,
+                SpeciesId = pokemon.Species,
+                SpeciesName = pokemon.SpeciesName,
+                Nickname = pokemon.Nickname,
+                LocationName = encounter.LocationName,
+                LocationId = encounter.LocationId,
+                Pid = pokemon.Pid,
+                IsShiny = pokemon.IsShiny,
+                IsFirstEncounter = encounter.IsFirstEncounter
+            };
+        }
+    }
+
+    private void ScheduleCatchFailure(ActiveCatchEncounter encounter)
+    {
+        CancellationTokenSource cancellation;
+
+        lock (_catchSync)
+        {
+            if (!ReferenceEquals(_activeEncounter, encounter) ||
+                encounter.WasCaught ||
+                !encounter.BattleEnded)
+            {
+                return;
+            }
+
+            CancelPendingCatchFailureLocked();
+            cancellation = new CancellationTokenSource();
+            _pendingCatchFailure = cancellation;
+        }
+
+        _ = ResolveCatchFailureAfterGracePeriodAsync(encounter, cancellation);
+    }
+
+    private async Task ResolveCatchFailureAfterGracePeriodAsync(
+        ActiveCatchEncounter encounter,
+        CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(CatchResolutionGracePeriod, cancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            cancellation.Dispose();
+            return;
+        }
+
+        NuzlockeRuleEvent? failureEvent = null;
+
+        lock (_catchSync)
+        {
+            if (ReferenceEquals(_pendingCatchFailure, cancellation))
+                _pendingCatchFailure = null;
+
+            if (ReferenceEquals(_activeEncounter, encounter) &&
+                encounter.BattleEnded &&
+                encounter.IsCatchable &&
+                !encounter.WasCaught)
+            {
+                _activeEncounter = null;
+                failureEvent = CreateCatchFailedEvent(encounter);
+            }
+        }
+
+        cancellation.Dispose();
+
+        if (failureEvent is not null)
+            Publish(failureEvent);
+    }
+
+    private void CancelPendingCatchFailureLocked()
+    {
+        _pendingCatchFailure?.Cancel();
+        _pendingCatchFailure = null;
+    }
+
+    private static NuzlockeRuleEvent CreateCatchFailedEvent(ActiveCatchEncounter encounter) =>
+        new()
+        {
+            Type = NuzlockeRuleEventType.CatchFailed,
+            OccurredAt = DateTimeOffset.Now,
+            SpeciesId = encounter.Pokemon.SpeciesId,
+            SpeciesName = encounter.Pokemon.SpeciesName,
+            Nickname = encounter.Pokemon.Nickname,
+            LocationName = encounter.LocationName,
+            LocationId = encounter.LocationId,
+            Pid = encounter.Pokemon.Pid,
+            IsShiny = encounter.Pokemon.IsShiny,
+            IsFirstEncounter = encounter.IsFirstEncounter
+        };
 
     private static string ResolveLiveLocationName(string stateLocationName, int? locationId)
     {
@@ -288,6 +410,7 @@ public sealed class NuzlockeRuleEventSource
         public int? LocationId { get; }
         public bool IsFirstEncounter { get; }
         public bool IsCatchable { get; }
+        public bool BattleEnded { get; set; }
         public bool WasCaught { get; set; }
     }
 }
