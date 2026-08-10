@@ -5,7 +5,7 @@ namespace SoulBuddy.Sources;
 
 public sealed class NuzlockeRuleEventSource
 {
-    private static readonly TimeSpan CatchResolutionGracePeriod = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan CatchResolutionGracePeriod = TimeSpan.FromSeconds(4);
 
     private readonly LocationMapper _locationMapper;
     private readonly Dictionary<long, int> _lastHpByPid = [];
