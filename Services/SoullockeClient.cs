@@ -145,15 +145,11 @@ public sealed class SoullockeClient
         if (result.TryGetValue(playerId, out var run))
         {
             if (string.Equals(playerId, _config.PlayerId, StringComparison.OrdinalIgnoreCase) &&
-                run.Encounters.Values.Any(encounter =>
-                    string.Equals(
-                        encounter.Status?.Trim(),
-                        "not-caught",
-                        StringComparison.OrdinalIgnoreCase)))
+                run.Encounters.Values.Any(encounter => IsLegacySoulBuddyNotCaughtStatus(encounter.Status)))
             {
-                // SoulBuddy briefly emitted "not-caught". Soullocke's UI expects
-                // "notcaught", so remember to rewrite the local player's run after
-                // normalization once LoadRunAsync has initialized the run metadata.
+                // SoulBuddy briefly emitted two status spellings that Soullocke does not
+                // recognize. Normalize them locally, then rewrite the run using the exact
+                // value used by Soullocke itself: "not-catched".
                 _loadedLocalRunRequiresStatusRepair = true;
             }
 
@@ -347,11 +343,14 @@ public sealed class SoullockeClient
             _ => location.Trim()
         };
 
+    private static bool IsLegacySoulBuddyNotCaughtStatus(string? status) =>
+        (status ?? string.Empty).Trim().ToLowerInvariant() is "notcaught" or "not-caught";
+
     private static string ToSoullockeStatus(string? status) =>
         (status ?? "alive").Trim().ToLowerInvariant() switch
         {
             "fainted" => "fainted",
-            "notcaught" or "not-caught" => "notcaught",
+            "notcaught" or "not-caught" or "not-catched" => "not-catched",
             "brofailed" or "bro-failed" => "bro-failed",
             "boxed" or "box" => "boxed",
             _ => "alive"
@@ -361,7 +360,7 @@ public sealed class SoullockeClient
         (status ?? "alive").Trim().ToLowerInvariant() switch
         {
             "fainted" => "fainted",
-            "notcaught" or "not-caught" => "notcaught",
+            "notcaught" or "not-caught" or "not-catched" => "notcaught",
             "brofailed" or "bro-failed" => "brofailed",
             "boxed" or "box" => "boxed",
             _ => "alive"
