@@ -59,6 +59,15 @@ public sealed class SoullockeClient
         _localRunNumber = run.RunNumber > 0 ? run.RunNumber : _config.RunNumber;
         _localRunStatus = string.IsNullOrWhiteSpace(run.Status) ? "open" : run.Status;
         _localRunMetadataInitialized = true;
+
+        // Older SoulBuddy versions accidentally used the wild opponent's Gen-4
+        // LocationMet field as the current HGSS encounter location. Gen-4 IDs 16-45
+        // were then mapped to Sinnoh routes 201-230, creating hidden ghost entries
+        // such as "Route 221" in an otherwise valid HGSS Soullocke run. Those route
+        // numbers cannot exist in HeartGold/SoulSilver, so they are safe to purge.
+        if (RemoveLegacyInvalidHgssRoutes(run))
+            await SaveLocalRunAsync(run.Encounters, cancellationToken);
+
         return run;
     }
 
@@ -190,6 +199,35 @@ public sealed class SoullockeClient
                 $"Soullocke konnte für den lokalen Spieler nicht gespeichert werden: " +
                 $"{(int)response.StatusCode} {body}");
         }
+    }
+
+    private bool RemoveLegacyInvalidHgssRoutes(SoullockeRun run)
+    {
+        if (_sessionGameName is not "heartgold" and not "soulsilver")
+            return false;
+
+        var invalidKeys = run.Encounters.Keys
+            .Where(IsInvalidHgssSinnohRoute)
+            .ToArray();
+
+        foreach (var key in invalidKeys)
+        {
+            run.Encounters.Remove(key);
+            Console.WriteLine(
+                $"Legacy-SoulBuddy-Encounter aus Soullocke entfernt: {key} " +
+                "(ungültige HGSS-Route aus früherer Ortserkennung).");
+        }
+
+        return invalidKeys.Length > 0;
+    }
+
+    private static bool IsInvalidHgssSinnohRoute(string location)
+    {
+        var trimmed = location.Trim();
+        if (!trimmed.StartsWith("Route ", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return int.TryParse(trimmed[6..], out var route) && route is >= 201 and <= 230;
     }
 
     private Dictionary<string, SoullockeEncounter> ConvertEncounterKeysForSoullocke(
