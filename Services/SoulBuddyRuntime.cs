@@ -107,7 +107,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
 
         var eventFilePath = Path.Combine(runtimeDirectory, "emulator-events.jsonl");
         var overlayEventFilePath = Path.Combine(runtimeDirectory, "overlay-events.jsonl");
-        var databasePath = Path.Combine(configDirectory, "soulbuddy.db");
+        var databasePath = BuildDatabasePath(configDirectory, config);
         var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         var snapshotPartySource = new JsonPartySource(partyJsonPath);
         var livePartySource = new LivePartySource(
@@ -152,6 +152,40 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
 
         await runtime.SyncService.InitializeAsync(cancellationToken);
         return runtime;
+    }
+
+    private static string BuildDatabasePath(string configDirectory, AppConfig config)
+    {
+        if (!config.SoullockeEnabled || string.IsNullOrWhiteSpace(config.SessionId))
+            return Path.Combine(configDirectory, "soulbuddy.db");
+
+        var session = SanitizePathComponent(config.SessionId);
+        var player = SanitizePathComponent(config.PlayerName);
+        var run = Math.Max(1, config.RunNumber);
+
+        return Path.Combine(
+            configDirectory,
+            "data",
+            "sessions",
+            session,
+            player,
+            $"run-{run}",
+            "soulbuddy.db");
+    }
+
+    private static string SanitizePathComponent(string value)
+    {
+        var sanitized = new string(value
+            .Trim()
+            .Select(character =>
+                char.IsLetterOrDigit(character) || character is '-' or '_'
+                    ? character
+                    : '_')
+            .ToArray());
+
+        return string.IsNullOrWhiteSpace(sanitized)
+            ? "unknown"
+            : sanitized;
     }
 
     private static string FindConfigDirectory()
