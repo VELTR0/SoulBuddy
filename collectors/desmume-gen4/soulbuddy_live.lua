@@ -20,6 +20,9 @@ local party_cache = {}
 local last_console_signature = ""
 local last_console_time = 0
 local console_interval = 1.0
+local last_live_state_signature = ""
+local last_live_poll_frame = -1000
+local live_poll_frame_interval = 6
 
 -- Integrated overlay queue.
 local overlay_read_position = 0
@@ -72,7 +75,6 @@ end
 local function append_event(state)
     local file = io.open(event_path, "a")
     if file == nil then
-        print("[SoulBuddy Live] Could not open event file: " .. event_path)
         return false
     end
 
@@ -252,30 +254,7 @@ local function candidate_signature(candidates, battle_flag, battle_kind, opponen
     return table.concat(parts, "|")
 end
 
-local function print_diagnostic(candidates, battle_flag, battle_kind, own_active, opponent, current_pointer)
-    print("============================================================")
-    print("[SoulBuddy Live] HGSS live encounter v3")
-    print("[SoulBuddy Live] game=" .. tostring(collector_game) ..
-        " subgame=" .. tostring(collector_subgame) ..
-        " gameName=" .. tostring(getGameName()) ..
-        " pointer=" .. string.format("0x%08X", current_pointer or 0))
-    print("[SoulBuddy Live] in_battle=" .. tostring(battle_flag))
-    print("[SoulBuddy Live] battle_kind=" .. tostring(battle_kind))
-    print("[SoulBuddy Live] own_active=" .. pokemon_text(own_active))
-    print("[SoulBuddy Live] opponent=" .. pokemon_text(opponent))
-    print("[SoulBuddy Live] Candidate memory layouts:")
-    for _, candidate in ipairs(candidates) do
-        local suffix = candidate.error ~= nil and (" error=" .. candidate.error) or ""
-        print(string.format(
-            "[SoulBuddy Live] mode=%d slot=%d addr=0x%08X battle=%s -> %s%s",
-            candidate.mode, candidate.slot, candidate.address or 0,
-            tostring(candidate.battle), pokemon_text(candidate.pokemon), suffix
-        ))
-    end
-    print("============================================================")
-end
-
-local function emit_live_diagnostic()
+local function emit_live_state(force)
     refresh_collector_metadata()
 
     local current_pointer = getPointer() or 0
@@ -296,12 +275,11 @@ local function emit_live_diagnostic()
     end
 
     local signature = candidate_signature(candidates, battle_flag, battle_kind, opponent)
-    local now = os.clock()
-    if signature ~= last_console_signature or now - last_console_time >= console_interval then
-        print_diagnostic(candidates, battle_flag, battle_kind, own_active, opponent, current_pointer)
-        last_console_signature = signature
-        last_console_time = now
+    if not force and signature == last_live_state_signature then
+        return
     end
+
+    last_live_state_signature = signature
 
     append_event({
         timestamp = os.time(),
@@ -332,12 +310,28 @@ function send_slots(slots_info, generation, selected_game, selected_subgame)
 
     local success = original_send_slots(slots_info, generation, selected_game, selected_subgame)
     if contains_party then
-        local diagnostic_success, diagnostic_error = pcall(emit_live_diagnostic)
-        if not diagnostic_success then
-            print("[SoulBuddy Live] Diagnostic error: " .. tostring(diagnostic_error))
+        local live_success = pcall(function() emit_live_state(true) end)
+        if not live_success then
+            -- Live-state errors must never interrupt the normal party collector.
         end
     end
     return success
+end
+
+local function poll_live_battle_state()
+    local frame = 0
+    if emu ~= nil and emu.framecount ~= nil then
+        frame = emu.framecount()
+    else
+        frame = last_live_poll_frame + live_poll_frame_interval
+    end
+
+    if frame - last_live_poll_frame < live_poll_frame_interval then
+        return
+    end
+    last_live_poll_frame = frame
+
+    pcall(function() emit_live_state(false) end)
 end
 
 local function initialize_overlay_read_position()
@@ -428,15 +422,16 @@ local function draw_overlay_messages()
 end
 
 if gui ~= nil and gui.register ~= nil then
+    gui.register(poll_live_battle_state)
     gui.register(draw_overlay_messages)
 elseif emu ~= nil and emu.registerafter ~= nil then
+    emu.registerafter(poll_live_battle_state)
     emu.registerafter(draw_overlay_messages)
 else
     error("Diese DeSmuME-Version unterstützt weder gui.register noch emu.registerafter.")
 end
 
 print("============================================================")
-print("[SoulBuddy Live] Collector und Event-Overlay aktiv.")
-print("[SoulBuddy Live] Party, Boxen, Kämpfe und Overlays laufen in einem Script.")
+print("[SoulBuddy Live] Collector, Kampfstatus und Event-Overlay aktiv.")
 print("[SoulBuddy Live] No game memory is written by this collector.")
 print("============================================================")
