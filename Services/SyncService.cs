@@ -107,9 +107,9 @@ public sealed class SyncService
             {
                 break;
             }
-            catch
+            catch (Exception ex)
             {
-                // Laufende Synchronisierung bleibt aktiv. Technische Debug-Ausgaben sind bewusst deaktiviert.
+                Console.Error.WriteLine($"SoulLocke-Synchronisierung fehlgeschlagen: {ex.Message}");
             }
 
             await Task.Delay(_config.PollIntervalMilliseconds, cancellationToken);
@@ -149,7 +149,9 @@ public sealed class SyncService
         // Catch results are authoritative for Nuzlocke encounter completion.
         // Persist them before the normal party/box merge so even failed catches,
         // which can never appear in party memory, are kept in SoulBuddy/Soullocke.
-        await ApplyPendingCatchOutcomesAsync(run, cancellationToken);
+        var catchOutcomesChanged = await ApplyPendingCatchOutcomesAsync(run, cancellationToken);
+        if (run is not null && catchOutcomesChanged)
+            await PersistOwnRunAsync(run, cancellationToken);
 
         // Only the partner run is refreshed from Soullocke after initialization.
         var partnerRun = _config.SoullockeEnabled
@@ -313,6 +315,13 @@ public sealed class SyncService
         if (run is null || (!_ownRunDirty && !forceInitialLiveSave))
             return;
 
+        await PersistOwnRunAsync(run, cancellationToken);
+    }
+
+    private async Task PersistOwnRunAsync(
+        SoullockeRun run,
+        CancellationToken cancellationToken)
+    {
         // No verification read is performed here by design. Once initialized,
         // own data flows in one direction only: SoulBuddy -> Soullocke.
         await _soullockeClient.SaveRunAsync(run.Encounters, cancellationToken);
@@ -334,10 +343,12 @@ public sealed class SyncService
             _pendingCatchOutcomes.Enqueue(ruleEvent);
     }
 
-    private async Task ApplyPendingCatchOutcomesAsync(
+    private async Task<bool> ApplyPendingCatchOutcomesAsync(
         SoullockeRun? run,
         CancellationToken cancellationToken)
     {
+        var remoteChanged = false;
+
         while (_pendingCatchOutcomes.TryDequeue(out var ruleEvent))
         {
             if (ruleEvent.SpeciesId <= 0)
@@ -407,6 +418,7 @@ public sealed class SyncService
                 oldStatus != status)
             {
                 _ownRunDirty = true;
+                remoteChanged = true;
             }
 
             encounter.Pokemon = ruleEvent.SpeciesId;
@@ -421,6 +433,8 @@ public sealed class SyncService
 
             await _knownPokemon.MarkSoullockeSyncedAsync(mergedId, cancellationToken);
         }
+
+        return remoteChanged;
     }
 
     private void CapturePartnerSnapshot(SoullockeRun? partnerRun)
@@ -604,8 +618,8 @@ public sealed class SyncService
         (status ?? "alive").Trim().ToLowerInvariant() switch
         {
             "fainted" => "fainted",
-            "notcaught" => "notcaught",
-            "brofailed" => "brofailed",
+            "notcaught" or "not-caught" => "notcaught",
+            "brofailed" or "bro-failed" => "brofailed",
             "boxed" => "boxed",
             _ => "alive"
         };
