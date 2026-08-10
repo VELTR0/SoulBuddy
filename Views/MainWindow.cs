@@ -68,7 +68,7 @@ public sealed class MainWindow : Window
         Grid.SetRow(content, 2);
         content.Children.Add(Card(BuildPartySection()));
 
-        var stored = Card(BuildScrollableSection("Gefangene Pokémon", "PokemonCountText", _storedPanel));
+        var stored = Card(BuildScrollableSection("Encounters", "PokemonCountText", _storedPanel));
         Grid.SetColumn(stored, 1);
         content.Children.Add(stored);
 
@@ -309,13 +309,21 @@ public sealed class MainWindow : Window
     private Control PokemonCard(PokemonCardViewModel pokemon, bool party)
     {
         var small = party && _compact;
+        var failedEncounter = !party && IsFailedEncounter(pokemon);
+        var healthyEncounter = !party && IsHealthyEncounter(pokemon);
+        var cardBackground = failedEncounter ? "#301717" : healthyEncounter ? "#10251F" : "#0F1829";
+        var cardBorder = failedEncounter ? "#EF4444" : healthyEncounter ? "#22C55E" : "#344763";
+        var spriteBackground = failedEncounter ? "#3A1A1A" : healthyEncounter ? "#143026" : "#18243A";
+        var spriteBorder = failedEncounter ? "#7F1D1D" : healthyEncounter ? "#2F765E" : "#334866";
+        var subtitleColor = failedEncounter ? "#FCA5A5" : healthyEncounter ? "#86EFAC" : "#94A3B8";
+
         var sprite = new Image { Width = small ? 34 : 52, Height = small ? 34 : 52, Stretch = Stretch.Uniform };
         var spriteFrame = new Border
         {
             Width = small ? 40 : 58,
             Height = small ? 40 : 58,
-            Background = Brush("#18243A"),
-            BorderBrush = Brush("#334866"),
+            Background = Brush(spriteBackground),
+            BorderBrush = Brush(spriteBorder),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Child = sprite
@@ -325,7 +333,7 @@ public sealed class MainWindow : Window
         var name = Text(pokemon.NameLine, small ? 10 : 13, FontWeight.SemiBold, "#F8FAFC");
         name.TextTrimming = TextTrimming.CharacterEllipsis;
         text.Children.Add(name);
-        var location = Text($"📍 {pokemon.Subtitle}", small ? 8 : 10, FontWeight.Normal, "#94A3B8");
+        var location = Text($"📍 {pokemon.Subtitle}", small ? 8 : 10, FontWeight.Normal, subtitleColor);
         location.TextTrimming = TextTrimming.CharacterEllipsis;
         text.Children.Add(location);
 
@@ -362,7 +370,7 @@ public sealed class MainWindow : Window
         }
         else
         {
-            text.Children.Add(Text(pokemon.LevelText, 9, FontWeight.Medium, "#93C5FD"));
+            text.Children.Add(Text(pokemon.LevelText, 9, FontWeight.Medium, healthyEncounter ? "#86EFAC" : failedEncounter ? "#FCA5A5" : "#93C5FD"));
         }
 
         var ownLayout = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = small ? 6 : 9, MinWidth = 0 };
@@ -388,8 +396,8 @@ public sealed class MainWindow : Window
             VerticalAlignment = party ? VerticalAlignment.Stretch : VerticalAlignment.Center,
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Padding = new Thickness(small ? 3 : 7),
-            Background = Brush("#0F1829"),
-            BorderBrush = Brush("#344763"),
+            Background = Brush(cardBackground),
+            BorderBrush = Brush(cardBorder),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8)
         };
@@ -397,6 +405,15 @@ public sealed class MainWindow : Window
         _ = LoadSpriteAsync(pokemon.SpeciesId, pokemon.IsShiny, sprite);
         return button;
     }
+
+    private static bool IsFailedEncounter(PokemonCardViewModel pokemon) =>
+        pokemon.Subtitle.EndsWith(" · Nicht gefangen", StringComparison.OrdinalIgnoreCase) ||
+        pokemon.Subtitle.EndsWith(" · Besiegt", StringComparison.OrdinalIgnoreCase) ||
+        pokemon.Subtitle.EndsWith(" · Bro-Failed", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsHealthyEncounter(PokemonCardViewModel pokemon) =>
+        pokemon.Subtitle.EndsWith(" · Lebendig", StringComparison.OrdinalIgnoreCase) ||
+        pokemon.Subtitle.EndsWith(" · Box", StringComparison.OrdinalIgnoreCase);
 
     private Control BuildSoulLinkPanel(PokemonCardViewModel pokemon, bool small)
     {
