@@ -40,8 +40,18 @@ public sealed class SoullockePasswordValidationResponse
 
 public sealed class BatchLoadResponse
 {
+    private Dictionary<string, SoullockeRun> _playerData = [];
+
     [JsonPropertyName("playerData")]
-    public Dictionary<string, SoullockeRun> PlayerData { get; init; } = [];
+    public Dictionary<string, SoullockeRun> PlayerData
+    {
+        get => _playerData;
+        init
+        {
+            _playerData = value ?? [];
+            SoullockePartnerCatchObserver.ObserveLoadedRuns(_playerData);
+        }
+    }
 
     [JsonPropertyName("errors")]
     public List<object> Errors { get; init; } = [];
@@ -75,6 +85,121 @@ public sealed class SoullockeEncounter
 
     [JsonPropertyName("status")]
     public string Status { get; set; } = "alive";
+}
+
+public sealed record SoullockePartnerCatchDetected(
+    int Pokemon,
+    string? Nickname,
+    string Location);
+
+/// <summary>
+/// Observes the batch-load responses that SoulBuddy already performs. The first
+/// response for each player establishes a baseline. Later additions with a caught
+/// state are surfaced as partner-catch notifications without requiring another poll.
+/// </summary>
+public static class SoullockePartnerCatchObserver
+{
+    private static readonly object Sync = new();
+    private static readonly Dictionary<string, Dictionary<string, EncounterSnapshot>> Snapshots =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static Action<SoullockePartnerCatchDetected>? _handler;
+
+    public static void ResetAndSetHandler(Action<SoullockePartnerCatchDetected> handler)
+    {
+        lock (Sync)
+        {
+            Snapshots.Clear();
+            _handler = handler;
+        }
+    }
+
+    public static void ObserveLoadedRuns(IReadOnlyDictionary<string, SoullockeRun> runs)
+    {
+        var detected = new List<SoullockePartnerCatchDetected>();
+        Action<SoullockePartnerCatchDetected>? handler;
+
+        lock (Sync)
+        {
+            foreach (var player in runs)
+            {
+                var current = BuildSnapshot(player.Value);
+
+                if (Snapshots.TryGetValue(player.Key, out var previous))
+                {
+                    foreach (var encounter in current)
+                    {
+                        if (encounter.Value.Pokemon <= 0 ||
+                            encounter.Value.Status is not "alive" and not "boxed")
+                        {
+                            continue;
+                        }
+
+                        var existedBefore = previous.TryGetValue(encounter.Key, out var oldEncounter) &&
+                                           oldEncounter.Pokemon > 0;
+                        if (existedBefore)
+                            continue;
+
+                        detected.Add(new SoullockePartnerCatchDetected(
+                            encounter.Value.Pokemon,
+                            encounter.Value.Nickname,
+                            encounter.Value.Location));
+                    }
+                }
+
+                Snapshots[player.Key] = current;
+            }
+
+            handler = _handler;
+        }
+
+        if (handler is null)
+            return;
+
+        foreach (var encounter in detected)
+            handler(encounter);
+    }
+
+    private static Dictionary<string, EncounterSnapshot> BuildSnapshot(SoullockeRun run)
+    {
+        var result = new Dictionary<string, EncounterSnapshot>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pair in run.Encounters)
+        {
+            var location = pair.Key.Trim();
+            result[NormalizeLocation(location)] = new EncounterSnapshot(
+                pair.Value.Pokemon,
+                pair.Value.Nickname,
+                NormalizeStatus(pair.Value.Status),
+                location);
+        }
+
+        return result;
+    }
+
+    private static string NormalizeLocation(string value) =>
+        new(value
+            .Trim()
+            .ToLowerInvariant()
+            .Where(char.IsLetterOrDigit)
+            .ToArray());
+
+    private static string NormalizeStatus(string? status) =>
+        (status ?? "alive").Trim().ToLowerInvariant() switch
+        {
+            "box" or "boxed" => "boxed",
+            "alive" => "alive",
+            "notcaught" or "not-caught" or "not-catched" => "notcaught",
+            "fainted" => "fainted",
+            "brofailed" or "bro-failed" => "brofailed",
+            _ => "alive"
+        };
+
+    private sealed record EncounterSnapshot(
+        int Pokemon,
+        string? Nickname,
+        string Status,
+        string Location);
 }
 
 public sealed class LoadRunsRequest
