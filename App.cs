@@ -21,10 +21,7 @@ public sealed class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var launchedFromLua = desktop.Args?.Any(argument =>
-                string.Equals(argument, "--from-lua", StringComparison.OrdinalIgnoreCase)) == true;
-
-            desktop.MainWindow = new SessionSetupWindow(launchedFromLua);
+            desktop.MainWindow = new SessionSetupWindow();
             desktop.Exit += OnDesktopExit;
         }
 
@@ -46,10 +43,47 @@ public sealed class App : Application
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+    }
 
-        Console.WriteLine(
-            $"SoulBuddy läuft ohne Hauptfenster für {context.LocalPlayer.DisplayName}. " +
-            "Sync, Collector und Overlays bleiben aktiv.");
+    public async Task ShowSessionSetupWindowAsync()
+    {
+        if (ApplicationLifetime is not IClassicDesktopStyleApplicationLifetime desktop)
+            return;
+
+        var existingSetup = desktop.Windows
+            .OfType<SessionSetupWindow>()
+            .FirstOrDefault();
+        if (existingSetup is not null)
+        {
+            desktop.MainWindow = existingSetup;
+            existingSetup.ShowInTaskbar = true;
+            existingSetup.Show();
+            existingSetup.Activate();
+            return;
+        }
+
+        // Keep the process alive while the previous run is being torn down and the
+        // setup window becomes the new main window.
+        desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+
+        var setupWindow = new SessionSetupWindow();
+        desktop.MainWindow = setupWindow;
+        setupWindow.Show();
+
+        if (_headlessRuntime is not null)
+        {
+            await _headlessRuntime.DisposeAsync();
+            _headlessRuntime = null;
+        }
+
+        foreach (var window in desktop.Windows.ToArray())
+        {
+            if (!ReferenceEquals(window, setupWindow))
+                window.Close();
+        }
+
+        desktop.ShutdownMode = ShutdownMode.OnLastWindowClose;
+        setupWindow.Activate();
     }
 
     private void OnDesktopExit(object? sender, ControlledApplicationLifetimeExitEventArgs eventArgs)
