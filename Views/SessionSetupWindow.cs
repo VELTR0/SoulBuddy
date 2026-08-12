@@ -12,7 +12,6 @@ namespace SoulBuddy.Views;
 public sealed class SessionSetupWindow : Window
 {
     private readonly SessionStore _sessionStore = new();
-    private readonly bool _autoStartActiveProfile;
     private readonly TextBox _playerNameBox;
     private readonly TextBox _soullockeLinkBox;
     private readonly TextBox _soullockePasswordBox;
@@ -21,25 +20,15 @@ public sealed class SessionSetupWindow : Window
     private readonly Border _activePlayerCard;
     private readonly TextBlock _activePlayerTitle;
     private SessionContext? _activeContext;
-    private bool _autoStartAttempted;
 
-    public SessionSetupWindow(bool autoStartActiveProfile = false)
+    public SessionSetupWindow()
     {
-        _autoStartActiveProfile = autoStartActiveProfile;
-
         Title = "SoulBuddy";
         Width = 620;
         Height = 690;
         MinWidth = 520;
         MinHeight = 540;
         Background = Brush("#0B1220");
-
-        if (_autoStartActiveProfile)
-        {
-            Opacity = 0;
-            ShowInTaskbar = false;
-            ShowActivated = false;
-        }
 
         _playerNameBox = CreateTextBox("Dein Spielername");
         _soullockeLinkBox = CreateTextBox("SoulLocke-Link");
@@ -85,7 +74,7 @@ public sealed class SessionSetupWindow : Window
 
         content.Children.Add(Text("SoulBuddy", 36, FontWeight.Bold, "#F8FAFC"));
         content.Children.Add(Text(
-            "SoulLocke ist die zentrale Verbindung zwischen den SoulBuddy-Instanzen. Gib deinen Spielernamen sowie die SoulLocke-Session ein.",
+            "Wähle bei jedem Start den gewünschten SoulLocke-Run oder gib eine neue SoulLocke-Session ein.",
             15,
             FontWeight.Normal,
             "#94A3B8"));
@@ -105,7 +94,7 @@ public sealed class SessionSetupWindow : Window
             "#7C8BA1"));
         form.Children.Add(_showMainWindowCheckBox);
         form.Children.Add(Text(
-            "Ausgeschaltet läuft SoulBuddy nur im Hintergrund. Sync, Collector und Overlay bleiben aktiv. Ein automatischer Start durch das Lua-Script verwendet diese Einstellung.",
+            "Ausgeschaltet läuft SoulBuddy nach deiner Auswahl nur im Hintergrund. Sync, Collector und Overlay bleiben aktiv.",
             11,
             FontWeight.Normal,
             "#7C8BA1"));
@@ -123,28 +112,6 @@ public sealed class SessionSetupWindow : Window
     private async void OnOpened(object? sender, EventArgs eventArgs)
     {
         await LoadActivePlayerAsync();
-
-        if (_autoStartActiveProfile && !_autoStartAttempted && _activeContext is not null)
-        {
-            _autoStartAttempted = true;
-            await ContinueAsync();
-
-            // If automatic startup failed, the setup window is still open. Reveal it
-            // so the user can correct the saved profile instead of leaving an invisible
-            // process behind.
-            if (IsVisible)
-                RevealForManualSetup();
-            return;
-        }
-
-        RevealForManualSetup();
-    }
-
-    private void RevealForManualSetup()
-    {
-        Opacity = 1;
-        ShowInTaskbar = true;
-        ShowActivated = true;
         Activate();
     }
 
