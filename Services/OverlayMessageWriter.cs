@@ -30,8 +30,16 @@ public sealed class OverlayMessageWriter
         SoullockePartnerCatchObserver.SetBoxHandler(WritePartnerBox);
     }
 
-    public void Write(NuzlockeRuleEvent ruleEvent) =>
+    public void Write(NuzlockeRuleEvent ruleEvent)
+    {
+        // Boxing your own Pokémon is still a rule event because SyncService needs it
+        // to persist the local Soullocke status as "boxed". Only the local overlay is
+        // suppressed; the partner still receives the remote boxing notification.
+        if (ruleEvent.Type == NuzlockeRuleEventType.PokemonBoxed)
+            return;
+
         WriteMessage(FormatMessage(ruleEvent));
+    }
 
     private void WritePartnerCatch(SoullockePartnerCatchDetected partnerCatch)
     {
@@ -106,9 +114,6 @@ public sealed class OverlayMessageWriter
         {
             NuzlockeRuleEventType.PokemonKnockedOut =>
                 $"{name} ist K.O.!",
-
-            NuzlockeRuleEventType.PokemonBoxed =>
-                $"{name} wurde in die Box gelegt!",
 
             NuzlockeRuleEventType.PartnerPokemonKnockedOut =>
                 FormatPartnerKnockout(ruleEvent),
