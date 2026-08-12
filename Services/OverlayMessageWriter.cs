@@ -14,6 +14,8 @@ public sealed class OverlayMessageWriter
     private readonly string _filePath;
     private readonly object _sync = new();
     private readonly IReadOnlyDictionary<int, string> _speciesNames;
+    private readonly Dictionary<string, DateTimeOffset> _recentMessages =
+        new(StringComparer.Ordinal);
 
     public OverlayMessageWriter(string filePath)
     {
@@ -22,10 +24,10 @@ public sealed class OverlayMessageWriter
         File.WriteAllText(_filePath, string.Empty);
         _speciesNames = LoadSpeciesNames(filePath);
 
-        // This writer is created before the first Soullocke run is loaded. Resetting
-        // here means the first response for local player and partner becomes a quiet
-        // baseline; only later partner additions produce an overlay notification.
+        // The first loaded response for each player is a quiet baseline. Later
+        // partner additions and explicit box-status transitions are surfaced.
         SoullockePartnerCatchObserver.ResetAndSetHandler(WritePartnerCatch);
+        SoullockePartnerCatchObserver.SetBoxHandler(WritePartnerBox);
     }
 
     public void Write(NuzlockeRuleEvent ruleEvent) =>
@@ -33,9 +35,7 @@ public sealed class OverlayMessageWriter
 
     private void WritePartnerCatch(SoullockePartnerCatchDetected partnerCatch)
     {
-        var species = _speciesNames.TryGetValue(partnerCatch.Pokemon, out var resolved)
-            ? resolved
-            : $"Pokémon #{partnerCatch.Pokemon}";
+        var species = ResolveSpeciesName(partnerCatch.Pokemon, null);
         var name = string.IsNullOrWhiteSpace(partnerCatch.Nickname)
             ? species
             : partnerCatch.Nickname!;
@@ -45,21 +45,60 @@ public sealed class OverlayMessageWriter
             $"SoulLink-Event: Partner hat {name} in {partnerCatch.Location} gefangen.");
     }
 
+    private void WritePartnerBox(SoullockePartnerBoxDetected partnerBox)
+    {
+        var partnerSpecies = ResolveSpeciesName(partnerBox.Pokemon, null);
+        var partnerName = string.IsNullOrWhiteSpace(partnerBox.Nickname)
+            ? partnerSpecies
+            : partnerBox.Nickname!;
+
+        var linkedSpecies = partnerBox.LinkedPokemon is > 0
+            ? ResolveSpeciesName(partnerBox.LinkedPokemon.Value, null)
+            : "verknüpftes Pokémon";
+        var linkedName = string.IsNullOrWhiteSpace(partnerBox.LinkedNickname)
+            ? linkedSpecies
+            : partnerBox.LinkedNickname!;
+
+        WriteMessage($"{partnerName} (Partner von {linkedName}) wurde in die Box gelegt!");
+        Console.WriteLine(
+            $"SoulLink-Event: {partnerName} wurde in {partnerBox.Location} eingeboxt; " +
+            $"verknüpft mit {linkedName}.");
+    }
+
     private void WriteMessage(string message)
     {
-        var line = JsonSerializer.Serialize(new OverlayMessage
-        {
-            Message = message,
-            DurationSeconds = 7
-        }, JsonOptions);
-
         lock (_sync)
         {
+            var now = DateTimeOffset.UtcNow;
+            foreach (var stale in _recentMessages
+                         .Where(pair => now - pair.Value > TimeSpan.FromSeconds(3))
+                         .Select(pair => pair.Key)
+                         .ToArray())
+            {
+                _recentMessages.Remove(stale);
+            }
+
+            // Partner boxing is also represented as a normal rule event in older
+            // code paths. Suppress an identical message if both observers see it.
+            if (_recentMessages.TryGetValue(message, out var previous) &&
+                now - previous <= TimeSpan.FromSeconds(3))
+            {
+                return;
+            }
+
+            _recentMessages[message] = now;
+
+            var line = JsonSerializer.Serialize(new OverlayMessage
+            {
+                Message = message,
+                DurationSeconds = 7
+            }, JsonOptions);
+
             File.AppendAllText(_filePath, line + Environment.NewLine);
         }
     }
 
-    private static string FormatMessage(NuzlockeRuleEvent ruleEvent)
+    private string FormatMessage(NuzlockeRuleEvent ruleEvent)
     {
         var name = ShortPokemonName(ruleEvent.SpeciesName, ruleEvent.Nickname);
 
@@ -102,13 +141,33 @@ public sealed class OverlayMessageWriter
         return $"Partner K.O. - {linkedName} raus!";
     }
 
-    private static string FormatPartnerBoxed(NuzlockeRuleEvent ruleEvent)
+    private string FormatPartnerBoxed(NuzlockeRuleEvent ruleEvent)
     {
-        var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
-            ? "Verknüpftes Pokémon"
-            : ShortPokemonName(ruleEvent.LinkedSpeciesName, ruleEvent.LinkedNickname);
+        var partnerSpecies = ResolveSpeciesName(ruleEvent.SpeciesId, ruleEvent.SpeciesName);
+        var partnerName = string.IsNullOrWhiteSpace(ruleEvent.Nickname)
+            ? partnerSpecies
+            : ruleEvent.Nickname!;
 
-        return $"Partner hat eingeboxt - {linkedName} ebenfalls in die Box!";
+        var linkedSpecies = ruleEvent.LinkedSpeciesId is > 0
+            ? ResolveSpeciesName(ruleEvent.LinkedSpeciesId.Value, ruleEvent.LinkedSpeciesName)
+            : string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
+                ? "verknüpftes Pokémon"
+                : ruleEvent.LinkedSpeciesName!;
+        var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedNickname)
+            ? linkedSpecies
+            : ruleEvent.LinkedNickname!;
+
+        return $"{partnerName} (Partner von {linkedName}) wurde in die Box gelegt!";
+    }
+
+    private string ResolveSpeciesName(int speciesId, string? fallback)
+    {
+        if (_speciesNames.TryGetValue(speciesId, out var resolved))
+            return resolved;
+
+        return string.IsNullOrWhiteSpace(fallback)
+            ? $"Pokémon #{speciesId}"
+            : fallback!;
     }
 
     private static string ShortPokemonName(string species, string? nickname) =>
@@ -155,8 +214,6 @@ public sealed class OverlayMessageWriter
         }
         catch
         {
-            // Missing name data must never prevent overlay delivery. The caller
-            // falls back to the Pokédex number when the table cannot be read.
             return new Dictionary<int, string>();
         }
     }
