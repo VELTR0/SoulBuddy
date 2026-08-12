@@ -6,11 +6,16 @@ namespace SoulBuddy.Sources;
 public sealed class NuzlockeRuleEventSource
 {
     private static readonly TimeSpan CatchResolutionGracePeriod = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan BoxResolutionGracePeriod = TimeSpan.FromSeconds(10);
 
     private readonly LocationMapper _locationMapper;
     private readonly Dictionary<long, int> _lastHpByPid = [];
     private readonly HashSet<string> _encounteredLocations = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _catchSync = new();
+    private readonly object _partyBoxSync = new();
+    private readonly Dictionary<int, PartyPokemon> _partyBySlot = [];
+    private readonly Dictionary<(int Box, int Slot), long> _boxIdentityBySlot = [];
+    private readonly Dictionary<long, PendingBoxTransfer> _pendingBoxTransfers = [];
     private ActiveCatchEncounter? _activeEncounter;
     private CancellationTokenSource? _pendingCatchFailure;
     private bool _wasInBattle;
@@ -127,7 +132,25 @@ public sealed class NuzlockeRuleEventSource
             Publish(catchableEncounterEvent);
     }
 
-    public void ObservePokemonUpdate(IEnumerable<PartySlot> slots)
+    public void ObservePartyUpdate(IEnumerable<PartySlot> slots)
+    {
+        var update = slots.ToArray();
+        ObservePokemonUpdate(update);
+
+        foreach (var boxedEvent in TrackPartyUpdate(update))
+            Publish(boxedEvent);
+    }
+
+    public void ObserveBoxUpdate(IEnumerable<PartySlot> slots)
+    {
+        var update = slots.ToArray();
+        ObservePokemonUpdate(update);
+
+        foreach (var boxedEvent in TrackBoxUpdate(update))
+            Publish(boxedEvent);
+    }
+
+    private void ObservePokemonUpdate(IEnumerable<PartySlot> slots)
     {
         foreach (var slot in slots)
         {
@@ -135,9 +158,7 @@ public sealed class NuzlockeRuleEventSource
             if (pokemon is null || pokemon.Species <= 0 || pokemon.IsEgg)
                 continue;
 
-            var identity = pokemon.Pid != 0
-                ? pokemon.Pid
-                : BuildFallbackIdentity(pokemon);
+            var identity = GetPokemonIdentity(pokemon);
 
             if (_lastHpByPid.TryGetValue(identity, out var previousHp) &&
                 previousHp > 0 &&
@@ -165,6 +186,129 @@ public sealed class NuzlockeRuleEventSource
                 Publish(catchSucceededEvent);
         }
     }
+
+    private IReadOnlyList<NuzlockeRuleEvent> TrackPartyUpdate(
+        IReadOnlyList<PartySlot> slots)
+    {
+        var boxedEvents = new List<NuzlockeRuleEvent>();
+        var now = DateTimeOffset.UtcNow;
+
+        lock (_partyBoxSync)
+        {
+            RemoveExpiredBoxTransfersLocked(now);
+
+            var previousByIdentity = _partyBySlot.Values
+                .Where(IsUsablePokemon)
+                .GroupBy(GetPokemonIdentity)
+                .ToDictionary(group => group.Key, group => group.First());
+
+            foreach (var slot in slots)
+            {
+                if (slot.Box is not null)
+                    continue;
+
+                if (IsUsablePokemon(slot.Pokemon))
+                    _partyBySlot[slot.SlotId] = slot.Pokemon!;
+                else
+                    _partyBySlot.Remove(slot.SlotId);
+            }
+
+            var currentIdentities = _partyBySlot.Values
+                .Where(IsUsablePokemon)
+                .Select(GetPokemonIdentity)
+                .ToHashSet();
+
+            // A Pokémon that still exists somewhere in the six party slots was only
+            // reordered. Never treat a slot change alone as a box transfer.
+            foreach (var identity in currentIdentities)
+                _pendingBoxTransfers.Remove(identity);
+
+            foreach (var pair in previousByIdentity)
+            {
+                if (currentIdentities.Contains(pair.Key))
+                    continue;
+
+                _pendingBoxTransfers[pair.Key] = new PendingBoxTransfer(pair.Value, now);
+            }
+
+            ResolveConfirmedBoxTransfersLocked(boxedEvents);
+        }
+
+        return boxedEvents;
+    }
+
+    private IReadOnlyList<NuzlockeRuleEvent> TrackBoxUpdate(
+        IReadOnlyList<PartySlot> slots)
+    {
+        var boxedEvents = new List<NuzlockeRuleEvent>();
+        var now = DateTimeOffset.UtcNow;
+
+        lock (_partyBoxSync)
+        {
+            RemoveExpiredBoxTransfersLocked(now);
+
+            foreach (var slot in slots)
+            {
+                if (slot.Box is not int box)
+                    continue;
+
+                var key = (box, slot.SlotId);
+                if (IsUsablePokemon(slot.Pokemon))
+                    _boxIdentityBySlot[key] = GetPokemonIdentity(slot.Pokemon!);
+                else
+                    _boxIdentityBySlot.Remove(key);
+            }
+
+            ResolveConfirmedBoxTransfersLocked(boxedEvents);
+        }
+
+        return boxedEvents;
+    }
+
+    private void ResolveConfirmedBoxTransfersLocked(
+        ICollection<NuzlockeRuleEvent> boxedEvents)
+    {
+        if (_pendingBoxTransfers.Count == 0 || _boxIdentityBySlot.Count == 0)
+            return;
+
+        var boxedIdentities = _boxIdentityBySlot.Values.ToHashSet();
+        var resolvedIdentities = _pendingBoxTransfers.Keys
+            .Where(boxedIdentities.Contains)
+            .ToArray();
+
+        foreach (var identity in resolvedIdentities)
+        {
+            var transfer = _pendingBoxTransfers[identity];
+            _pendingBoxTransfers.Remove(identity);
+            boxedEvents.Add(CreatePokemonBoxedEvent(transfer.Pokemon));
+        }
+    }
+
+    private void RemoveExpiredBoxTransfersLocked(DateTimeOffset now)
+    {
+        var expired = _pendingBoxTransfers
+            .Where(pair => now - pair.Value.RemovedAt > BoxResolutionGracePeriod)
+            .Select(pair => pair.Key)
+            .ToArray();
+
+        foreach (var identity in expired)
+            _pendingBoxTransfers.Remove(identity);
+    }
+
+    private NuzlockeRuleEvent CreatePokemonBoxedEvent(PartyPokemon pokemon) =>
+        new()
+        {
+            Type = NuzlockeRuleEventType.PokemonBoxed,
+            OccurredAt = DateTimeOffset.Now,
+            SpeciesId = pokemon.Species,
+            SpeciesName = pokemon.SpeciesName,
+            Nickname = pokemon.Nickname,
+            LocationName = _locationMapper.GetLocationName(pokemon.LocationMet)
+                           ?? $"Unbekannter Fangort ({pokemon.LocationMet})",
+            LocationId = pokemon.LocationMet > 0 ? pokemon.LocationMet : null,
+            Pid = pokemon.Pid,
+            IsShiny = pokemon.IsShiny
+        };
 
     public void PublishPartnerPokemonKnockedOut(
         string partnerPlayerName,
@@ -346,6 +490,10 @@ public sealed class NuzlockeRuleEventSource
                 Console.WriteLine($"Nuzlocke-Event: {name} ist K.O. gegangen.");
                 break;
 
+            case NuzlockeRuleEventType.PokemonBoxed:
+                Console.WriteLine($"Nuzlocke-Event: {name} wurde in die Box gelegt.");
+                break;
+
             case NuzlockeRuleEventType.PartnerPokemonKnockedOut:
                 var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
                     ? "Das verbundene Pokémon"
@@ -382,12 +530,32 @@ public sealed class NuzlockeRuleEventSource
             ? species
             : $"{nickname} ({species})";
 
+    private static bool IsUsablePokemon(PartyPokemon? pokemon) =>
+        pokemon is not null && pokemon.Species > 0 && !pokemon.IsEgg;
+
+    private static long GetPokemonIdentity(PartyPokemon pokemon) =>
+        pokemon.Pid != 0
+            ? pokemon.Pid
+            : BuildFallbackIdentity(pokemon);
+
     private static long BuildFallbackIdentity(PartyPokemon pokemon) =>
         -Math.Abs(HashCode.Combine(
             pokemon.Species,
             pokemon.OriginalTrainerId,
             pokemon.OriginalTrainerSecretId,
             pokemon.LocationMet));
+
+    private sealed class PendingBoxTransfer
+    {
+        public PendingBoxTransfer(PartyPokemon pokemon, DateTimeOffset removedAt)
+        {
+            Pokemon = pokemon;
+            RemovedAt = removedAt;
+        }
+
+        public PartyPokemon Pokemon { get; }
+        public DateTimeOffset RemovedAt { get; }
+    }
 
     private sealed class ActiveCatchEncounter
     {
