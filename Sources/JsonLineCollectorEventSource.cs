@@ -8,6 +8,8 @@ public sealed class JsonLineCollectorEventSource
 {
     private readonly string _eventFilePath;
     private readonly string _readyFilePath;
+    private readonly string _requestFilePath;
+    private readonly string _readyToken;
     private readonly LivePartySource _partySource;
     private readonly PlayerLiveStateSource _liveStateSource;
     private readonly NuzlockeRuleEventSource _ruleEventSource;
@@ -26,9 +28,10 @@ public sealed class JsonLineCollectorEventSource
         NuzlockeRuleEventSource ruleEventSource)
     {
         _eventFilePath = eventFilePath;
-        _readyFilePath = Path.Combine(
-            Path.GetDirectoryName(eventFilePath) ?? ".",
-            "soulbuddy-ready.txt");
+        var runtimeDirectory = Path.GetDirectoryName(eventFilePath) ?? ".";
+        _readyFilePath = Path.Combine(runtimeDirectory, "soulbuddy-ready.txt");
+        _requestFilePath = Path.Combine(runtimeDirectory, "soulbuddy-request.txt");
+        _readyToken = ReadCollectorRequestToken();
         _partySource = partySource;
         _liveStateSource = liveStateSource;
         _ruleEventSource = ruleEventSource;
@@ -47,8 +50,8 @@ public sealed class JsonLineCollectorEventSource
 
                     // Lua is allowed to emit its initial party/box snapshot only after
                     // this reader has established the position from which it will read.
-                    // Refreshing the timestamp also makes stale ready files from crashed
-                    // processes harmless.
+                    // The per-launch token ensures an older runtime cannot release a
+                    // newly restarted Lua collector while that runtime is shutting down.
                     WriteReadyHeartbeat();
 
                     await ReadAvailableEventsAsync(cancellationToken);
@@ -94,20 +97,53 @@ public sealed class JsonLineCollectorEventSource
         _readPositionInitialized = true;
     }
 
+    private string ReadCollectorRequestToken()
+    {
+        try
+        {
+            if (File.Exists(_requestFilePath))
+            {
+                var token = File.ReadAllText(_requestFilePath).Trim();
+                if (!string.IsNullOrWhiteSpace(token))
+                    return token;
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        // Manual SoulBuddy launches without a Lua request still work; there simply
+        // is no Lua callback waiting for this fallback token.
+        return $"manual-{Guid.NewGuid():N}";
+    }
+
     private void WriteReadyHeartbeat()
     {
         var timestamp = DateTimeOffset.UtcNow
             .ToUnixTimeSeconds()
             .ToString(CultureInfo.InvariantCulture);
-        File.WriteAllText(_readyFilePath, timestamp);
+        File.WriteAllText(
+            _readyFilePath,
+            _readyToken + Environment.NewLine + timestamp);
     }
 
     private void TryDeleteReadyHeartbeat()
     {
         try
         {
-            if (File.Exists(_readyFilePath))
-                File.Delete(_readyFilePath);
+            if (!File.Exists(_readyFilePath))
+                return;
+
+            using var reader = new StreamReader(_readyFilePath);
+            var token = reader.ReadLine();
+            if (!string.Equals(token, _readyToken, StringComparison.Ordinal))
+                return;
+
+            reader.Close();
+            File.Delete(_readyFilePath);
         }
         catch (IOException)
         {
