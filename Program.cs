@@ -1,30 +1,33 @@
 using Avalonia;
 using Avalonia.Threading;
+using SoulBuddy.Services;
 
 namespace SoulBuddy;
 
 internal static class Program
 {
     // Keep the names valid on both Windows and Unix-based systems such as macOS.
-    // The previous Local\ prefix was Windows-specific and unnecessary here.
+    // Lua-started instances append their unique launch token so multiple DeSmuME
+    // processes can use the same checkout at the same time.
     private const string SingleInstanceMutexName = "SoulBuddy.SingleInstance";
     private const string ShowSetupEventName = "SoulBuddy.ShowSetup";
 
     [STAThread]
     public static void Main(string[] args)
     {
+        LuaLaunchContext.Initialize(args);
+        var singleInstanceMutexName = LuaLaunchContext.InstanceName(SingleInstanceMutexName);
+        var showSetupEventName = LuaLaunchContext.InstanceName(ShowSetupEventName);
+
         using var singleInstance = new Mutex(
             initiallyOwned: true,
-            name: SingleInstanceMutexName,
+            name: singleInstanceMutexName,
             createdNew: out var createdNew);
 
         if (!createdNew)
         {
-            if (args.Any(argument =>
-                    string.Equals(argument, "--from-lua", StringComparison.OrdinalIgnoreCase)))
-            {
-                TrySignalExistingInstance();
-            }
+            if (LuaLaunchContext.FromLua)
+                TrySignalExistingInstance(showSetupEventName);
 
             return;
         }
@@ -32,7 +35,7 @@ internal static class Program
         using var showSetupEvent = new EventWaitHandle(
             initialState: false,
             mode: EventResetMode.AutoReset,
-            name: ShowSetupEventName);
+            name: showSetupEventName);
 
         var listenerThread = new Thread(() => ListenForSetupRequests(showSetupEvent))
         {
@@ -45,11 +48,11 @@ internal static class Program
             .StartWithClassicDesktopLifetime(args);
     }
 
-    private static void TrySignalExistingInstance()
+    private static void TrySignalExistingInstance(string showSetupEventName)
     {
         try
         {
-            using var showSetupEvent = EventWaitHandle.OpenExisting(ShowSetupEventName);
+            using var showSetupEvent = EventWaitHandle.OpenExisting(showSetupEventName);
             showSetupEvent.Set();
         }
         catch (WaitHandleCannotBeOpenedException)
