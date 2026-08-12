@@ -27,6 +27,7 @@ public sealed class SessionStore
         string playerName,
         string soullockeLink,
         string soullockePassword,
+        bool showMainWindow = true,
         CancellationToken cancellationToken = default)
     {
         ValidatePlayerName(playerName);
@@ -60,6 +61,7 @@ public sealed class SessionStore
             localPlayer.Id,
             soullockeLink,
             soullockePassword,
+            showMainWindow,
             cancellationToken);
 
         return new SessionContext
@@ -69,7 +71,8 @@ public sealed class SessionStore
             LaunchMode = SessionLaunchMode.Auto,
             SoullockeEnabled = true,
             SoullockeLink = soullockeLink.Trim(),
-            SoullockePassword = soullockePassword
+            SoullockePassword = soullockePassword,
+            ShowMainWindow = showMainWindow
         };
     }
 
@@ -101,7 +104,8 @@ public sealed class SessionStore
             LaunchMode = SessionLaunchMode.Auto,
             SoullockeEnabled = true,
             SoullockeLink = active.SoullockeLink,
-            SoullockePassword = active.SoullockePassword
+            SoullockePassword = active.SoullockePassword,
+            ShowMainWindow = active.ShowMainWindow ?? true
         };
     }
 
@@ -127,6 +131,7 @@ public sealed class SessionStore
         string playerId,
         string soullockeLink,
         string soullockePassword,
+        bool showMainWindow,
         CancellationToken cancellationToken)
     {
         var active = new ActiveSession
@@ -134,7 +139,8 @@ public sealed class SessionStore
             PlayerId = playerId,
             SoullockeEnabled = true,
             SoullockeLink = soullockeLink.Trim(),
-            SoullockePassword = soullockePassword
+            SoullockePassword = soullockePassword,
+            ShowMainWindow = showMainWindow
         };
         var json = JsonSerializer.Serialize(active, JsonOptions);
         await WriteAtomicallyAsync(_activeSessionPath, json, cancellationToken);
