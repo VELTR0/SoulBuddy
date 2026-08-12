@@ -34,6 +34,13 @@ public sealed class SessionSetupWindow : Window
         MinHeight = 540;
         Background = Brush("#0B1220");
 
+        if (_autoStartActiveProfile)
+        {
+            Opacity = 0;
+            ShowInTaskbar = false;
+            ShowActivated = false;
+        }
+
         _playerNameBox = CreateTextBox("Dein Spielername");
         _soullockeLinkBox = CreateTextBox("SoulLocke-Link");
         _soullockePasswordBox = CreateTextBox("SoulLocke-Passwort");
@@ -121,7 +128,24 @@ public sealed class SessionSetupWindow : Window
         {
             _autoStartAttempted = true;
             await ContinueAsync();
+
+            // If automatic startup failed, the setup window is still open. Reveal it
+            // so the user can correct the saved profile instead of leaving an invisible
+            // process behind.
+            if (IsVisible)
+                RevealForManualSetup();
+            return;
         }
+
+        RevealForManualSetup();
+    }
+
+    private void RevealForManualSetup()
+    {
+        Opacity = 1;
+        ShowInTaskbar = true;
+        ShowActivated = true;
+        Activate();
     }
 
     private async Task LoadActivePlayerAsync()
