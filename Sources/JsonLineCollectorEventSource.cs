@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using SoulBuddy.Models;
 
@@ -6,6 +7,7 @@ namespace SoulBuddy.Sources;
 public sealed class JsonLineCollectorEventSource
 {
     private readonly string _eventFilePath;
+    private readonly string _readyFilePath;
     private readonly LivePartySource _partySource;
     private readonly PlayerLiveStateSource _liveStateSource;
     private readonly NuzlockeRuleEventSource _ruleEventSource;
@@ -24,6 +26,9 @@ public sealed class JsonLineCollectorEventSource
         NuzlockeRuleEventSource ruleEventSource)
     {
         _eventFilePath = eventFilePath;
+        _readyFilePath = Path.Combine(
+            Path.GetDirectoryName(eventFilePath) ?? ".",
+            "soulbuddy-ready.txt");
         _partySource = partySource;
         _liveStateSource = liveStateSource;
         _ruleEventSource = ruleEventSource;
@@ -31,33 +36,53 @@ public sealed class JsonLineCollectorEventSource
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
-                if (!File.Exists(_eventFilePath))
+                try
+                {
+                    EnsureEventFileExists();
+                    InitializeReadPosition();
+
+                    // Lua is allowed to emit its initial party/box snapshot only after
+                    // this reader has established the position from which it will read.
+                    // Refreshing the timestamp also makes stale ready files from crashed
+                    // processes harmless.
+                    WriteReadyHeartbeat();
+
+                    await ReadAvailableEventsAsync(cancellationToken);
+                    WriteReadyHeartbeat();
+                    await Task.Delay(250, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (IOException)
                 {
                     await Task.Delay(500, cancellationToken);
-                    continue;
                 }
-
-                InitializeReadPosition();
-                await ReadAvailableEventsAsync(cancellationToken);
-                await Task.Delay(250, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (IOException)
-            {
-                await Task.Delay(500, cancellationToken);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                await Task.Delay(1000, cancellationToken);
+                catch (UnauthorizedAccessException)
+                {
+                    await Task.Delay(1000, cancellationToken);
+                }
             }
         }
+        finally
+        {
+            TryDeleteReadyHeartbeat();
+        }
+    }
+
+    private void EnsureEventFileExists()
+    {
+        var directory = Path.GetDirectoryName(_eventFilePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        if (!File.Exists(_eventFilePath))
+            File.WriteAllText(_eventFilePath, string.Empty);
     }
 
     private void InitializeReadPosition()
@@ -67,6 +92,29 @@ public sealed class JsonLineCollectorEventSource
 
         _readPosition = new FileInfo(_eventFilePath).Length;
         _readPositionInitialized = true;
+    }
+
+    private void WriteReadyHeartbeat()
+    {
+        var timestamp = DateTimeOffset.UtcNow
+            .ToUnixTimeSeconds()
+            .ToString(CultureInfo.InvariantCulture);
+        File.WriteAllText(_readyFilePath, timestamp);
+    }
+
+    private void TryDeleteReadyHeartbeat()
+    {
+        try
+        {
+            if (File.Exists(_readyFilePath))
+                File.Delete(_readyFilePath);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private async Task ReadAvailableEventsAsync(CancellationToken cancellationToken)
