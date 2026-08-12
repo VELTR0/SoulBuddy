@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -11,27 +12,41 @@ namespace SoulBuddy.Views;
 public sealed class SessionSetupWindow : Window
 {
     private readonly SessionStore _sessionStore = new();
+    private readonly bool _autoStartActiveProfile;
     private readonly TextBox _playerNameBox;
     private readonly TextBox _soullockeLinkBox;
     private readonly TextBox _soullockePasswordBox;
+    private readonly CheckBox _showMainWindowCheckBox;
     private readonly TextBlock _statusText;
     private readonly Border _activePlayerCard;
     private readonly TextBlock _activePlayerTitle;
     private SessionContext? _activeContext;
+    private bool _autoStartAttempted;
 
-    public SessionSetupWindow()
+    public SessionSetupWindow(bool autoStartActiveProfile = false)
     {
+        _autoStartActiveProfile = autoStartActiveProfile;
+
         Title = "SoulBuddy";
         Width = 620;
-        Height = 620;
+        Height = 690;
         MinWidth = 520;
-        MinHeight = 500;
+        MinHeight = 540;
         Background = Brush("#0B1220");
 
         _playerNameBox = CreateTextBox("Dein Spielername");
         _soullockeLinkBox = CreateTextBox("SoulLocke-Link");
         _soullockePasswordBox = CreateTextBox("SoulLocke-Passwort");
         _soullockePasswordBox.PasswordChar = '●';
+
+        _showMainWindowCheckBox = new CheckBox
+        {
+            Content = "Hauptfenster anzeigen",
+            IsChecked = true,
+            FontSize = 14,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = Brush("#E2E8F0")
+        };
 
         _statusText = Text(string.Empty, 13, FontWeight.Medium, "#CBD5E1");
         _statusText.TextWrapping = TextWrapping.Wrap;
@@ -81,6 +96,12 @@ public sealed class SessionSetupWindow : Window
             11,
             FontWeight.Normal,
             "#7C8BA1"));
+        form.Children.Add(_showMainWindowCheckBox);
+        form.Children.Add(Text(
+            "Ausgeschaltet läuft SoulBuddy nur im Hintergrund. Sync, Collector und Overlay bleiben aktiv. Ein automatischer Start durch das Lua-Script verwendet diese Einstellung.",
+            11,
+            FontWeight.Normal,
+            "#7C8BA1"));
         form.Children.Add(CreateButton("Starten", StartAsync, true));
         form.Children.Add(_statusText);
         content.Children.Add(CreateCard(form));
@@ -95,6 +116,12 @@ public sealed class SessionSetupWindow : Window
     private async void OnOpened(object? sender, EventArgs eventArgs)
     {
         await LoadActivePlayerAsync();
+
+        if (_autoStartActiveProfile && !_autoStartAttempted && _activeContext is not null)
+        {
+            _autoStartAttempted = true;
+            await ContinueAsync();
+        }
     }
 
     private async Task LoadActivePlayerAsync()
@@ -112,6 +139,7 @@ public sealed class SessionSetupWindow : Window
             _playerNameBox.Text = _activeContext.LocalPlayer.DisplayName;
             _soullockeLinkBox.Text = _activeContext.SoullockeLink;
             _soullockePasswordBox.Text = _activeContext.SoullockePassword;
+            _showMainWindowCheckBox.IsChecked = _activeContext.ShowMainWindow;
             _activePlayerCard.IsVisible = true;
         }
         catch (Exception ex)
@@ -127,6 +155,7 @@ public sealed class SessionSetupWindow : Window
             var playerName = _playerNameBox.Text ?? string.Empty;
             var link = _soullockeLinkBox.Text ?? string.Empty;
             var password = _soullockePasswordBox.Text ?? string.Empty;
+            var showMainWindow = _showMainWindowCheckBox.IsChecked != false;
 
             ValidateSoullockeInput(link, password);
             SoullockeLaunchSettings.Configure(link, password, playerName);
@@ -134,8 +163,10 @@ public sealed class SessionSetupWindow : Window
             var context = await _sessionStore.StartAsync(
                 playerName,
                 link,
-                password);
-            OpenMainWindow(context);
+                password,
+                showMainWindow);
+            _activeContext = context;
+            await LaunchAsync(context);
         });
     }
 
@@ -144,18 +175,25 @@ public sealed class SessionSetupWindow : Window
         if (_activeContext is null)
             return;
 
-        await ExecuteAsync(() =>
+        await ExecuteAsync(async () =>
         {
             ValidateSoullockeInput(
                 _activeContext.SoullockeLink,
                 _activeContext.SoullockePassword);
 
-            SoullockeLaunchSettings.Configure(
+            var context = await _sessionStore.StartAsync(
+                _activeContext.LocalPlayer.DisplayName,
                 _activeContext.SoullockeLink,
                 _activeContext.SoullockePassword,
-                _activeContext.LocalPlayer.DisplayName);
-            OpenMainWindow(_activeContext);
-            return Task.CompletedTask;
+                _showMainWindowCheckBox.IsChecked != false);
+            _activeContext = context;
+
+            SoullockeLaunchSettings.Configure(
+                context.SoullockeLink,
+                context.SoullockePassword,
+                context.LocalPlayer.DisplayName);
+
+            await LaunchAsync(context);
         });
     }
 
@@ -179,9 +217,26 @@ public sealed class SessionSetupWindow : Window
         }
     }
 
+    private async Task LaunchAsync(SessionContext context)
+    {
+        if (context.ShowMainWindow)
+        {
+            OpenMainWindow(context);
+            return;
+        }
+
+        if (Application.Current is not App app)
+            throw new InvalidOperationException("Der SoulBuddy-Hintergrundmodus konnte nicht gestartet werden.");
+
+        await app.StartHeadlessAsync(context);
+        Close();
+    }
+
     private void OpenMainWindow(SessionContext context)
     {
         var mainWindow = new MainWindow(context);
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+            desktop.MainWindow = mainWindow;
         mainWindow.Show();
         Close();
     }
