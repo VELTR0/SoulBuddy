@@ -1,6 +1,6 @@
 -- Starts SoulBuddy before any collector code is initialized and blocks this Lua
 -- bootstrap until the selected SoulBuddy run has a ready JSONL event reader.
--- A named mutex inside SoulBuddy prevents duplicate application instances.
+-- Windows and macOS use different executable names and launch commands.
 
 local source = debug.getinfo(1, "S").source
 if string.sub(source, 1, 1) == "@" then
@@ -14,6 +14,13 @@ local ready_file_path = runtime_directory .. "/soulbuddy-ready.txt"
 local request_file_path = runtime_directory .. "/soulbuddy-request.txt"
 local ready_message_printed = false
 
+local directory_separator = package ~= nil and package.config ~= nil
+    and string.sub(package.config, 1, 1)
+    or "/"
+local is_windows = directory_separator == "\\" or
+    (os.getenv ~= nil and os.getenv("OS") == "Windows_NT")
+local platform_name = is_windows and "Windows" or "macOS/Unix"
+
 local function file_exists(path)
     local file = io.open(path, "rb")
     if file == nil then return false end
@@ -22,10 +29,13 @@ local function file_exists(path)
 end
 
 local function ensure_runtime_directory()
-    os.execute(
-        'if not exist "' .. runtime_directory ..
-        '" mkdir "' .. runtime_directory .. '"'
-    )
+    local command
+    if is_windows then
+        command = 'if not exist "' .. runtime_directory .. '" mkdir "' .. runtime_directory .. '"'
+    else
+        command = 'mkdir -p "' .. runtime_directory .. '"'
+    end
+    os.execute(command)
 end
 
 -- Every Lua start gets its own token. An older SoulBuddy runtime can keep writing
@@ -72,30 +82,48 @@ end
 local function yield_while_waiting()
     -- No SoulBuddy collector/live code has been loaded at this point. frameadvance
     -- merely yields control back to DeSmuME so its UI remains responsive while the
-    -- user chooses a run in SoulBuddy. If unavailable, fall back to a short Windows
-    -- wait without initializing any collector state.
+    -- user chooses a run in SoulBuddy.
     if emu ~= nil and type(emu.frameadvance) == "function" then
-        emu.frameadvance()
-        return
+        local ok = pcall(emu.frameadvance)
+        if ok then return end
     end
 
-    os.execute('ping 127.0.0.1 -n 2 >nul')
+    if is_windows then
+        os.execute('ping 127.0.0.1 -n 2 >nul')
+    else
+        os.execute('sleep 1')
+    end
 end
 
 local candidates = {}
 local configured_path = os.getenv ~= nil and os.getenv("SOULBUDDY_EXE") or nil
 if configured_path ~= nil and configured_path ~= "" then
+    -- SOULBUDDY_EXE remains the override name for compatibility, even on macOS.
     candidates[#candidates + 1] = configured_path
 end
 
--- In a source checkout the Debug build is normally the freshest executable while
--- testing. SOULBUDDY_EXE can always override discovery for a published installation.
-candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/SoulBuddy.exe"
-candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/win-x64/SoulBuddy.exe"
-candidates[#candidates + 1] = project_root .. "/SoulBuddy.exe"
-candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/SoulBuddy.exe"
-candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/win-x64/SoulBuddy.exe"
-candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/win-x64/publish/SoulBuddy.exe"
+if is_windows then
+    -- In a Windows source checkout the Debug build is normally the freshest executable.
+    candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/SoulBuddy.exe"
+    candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/win-x64/SoulBuddy.exe"
+    candidates[#candidates + 1] = project_root .. "/SoulBuddy.exe"
+    candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/SoulBuddy.exe"
+    candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/win-x64/SoulBuddy.exe"
+    candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/win-x64/publish/SoulBuddy.exe"
+else
+    -- dotnet build/publish on macOS creates an apphost without the .exe extension.
+    -- Support both Apple Silicon and Intel output folders plus an optional .app bundle.
+    candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/SoulBuddy"
+    candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/osx-arm64/SoulBuddy"
+    candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/osx-x64/SoulBuddy"
+    candidates[#candidates + 1] = project_root .. "/SoulBuddy"
+    candidates[#candidates + 1] = project_root .. "/SoulBuddy.app/Contents/MacOS/SoulBuddy"
+    candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/SoulBuddy"
+    candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/osx-arm64/SoulBuddy"
+    candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/osx-arm64/publish/SoulBuddy"
+    candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/osx-x64/SoulBuddy"
+    candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/osx-x64/publish/SoulBuddy"
+end
 
 local executable = nil
 for _, candidate in ipairs(candidates) do
@@ -107,19 +135,35 @@ end
 
 if executable == nil then
     error(
-        "[SoulBuddy] EXE nicht gefunden. Baue SoulBuddy zuerst oder setze " ..
-        "SOULBUDDY_EXE auf den vollständigen EXE-Pfad.")
+        "[SoulBuddy] Programm nicht gefunden für " .. platform_name ..
+        ". Baue SoulBuddy zuerst oder setze SOULBUDDY_EXE auf den vollständigen Pfad.")
 end
 
-local windows_executable = string.gsub(executable, "/", "\\")
-local command = 'cmd /C start "" /B "' .. windows_executable .. '" --from-lua'
-local ok, result = pcall(os.execute, command)
-
-if not ok then
-    error("[SoulBuddy] Automatischer EXE-Start fehlgeschlagen: " .. tostring(result))
+local command
+if is_windows then
+    local windows_executable = string.gsub(executable, "/", "\\")
+    command = 'cmd /C start "" /B "' .. windows_executable .. '" --from-lua'
+else
+    command = 'nohup "' .. executable .. '" --from-lua >/dev/null 2>&1 &'
 end
 
-print("[SoulBuddy] Setup-Fenster automatisch gestartet/angefordert: " .. executable)
+local call_ok, result, reason, code = pcall(os.execute, command)
+if not call_ok then
+    error("[SoulBuddy] Automatischer Programmstart fehlgeschlagen: " .. tostring(result))
+end
+
+-- Lua 5.1 commonly returns a numeric exit status, newer Lua versions can return
+-- true/"exit"/0. Treat an explicit non-zero/false result as a launch failure.
+local launch_failed = result == false or result == nil or
+    (type(result) == "number" and result ~= 0) or
+    (result == true and type(code) == "number" and code ~= 0)
+if launch_failed then
+    error(
+        "[SoulBuddy] Automatischer Programmstart fehlgeschlagen (" ..
+        tostring(reason or result) .. ", Code " .. tostring(code or result) .. ").")
+end
+
+print("[SoulBuddy] Setup-Fenster automatisch gestartet/angefordert (" .. platform_name .. "): " .. executable)
 
 -- This is intentionally synchronous. Nothing after require('game_version') in the
 -- collector can initialize until the current SoulBuddy run confirms this launch token.
