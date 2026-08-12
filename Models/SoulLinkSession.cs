@@ -42,6 +42,10 @@ public sealed class ActiveSession
     public string SoullockeLink { get; init; } = string.Empty;
 
     public string SoullockePassword { get; init; } = string.Empty;
+
+    // Nullable for backwards compatibility: profiles written before this setting
+    // existed should keep the historical behavior and show the main window.
+    public bool? ShowMainWindow { get; init; }
 }
 
 public sealed class SessionContext
@@ -57,4 +61,6 @@ public sealed class SessionContext
     public string SoullockeLink { get; init; } = string.Empty;
 
     public string SoullockePassword { get; init; } = string.Empty;
+
+    public bool ShowMainWindow { get; init; } = true;
 }
