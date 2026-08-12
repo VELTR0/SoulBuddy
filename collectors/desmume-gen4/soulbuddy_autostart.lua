@@ -9,7 +9,9 @@ end
 
 local directory = string.match(source, "^(.*)[/\\]") or "."
 local project_root = directory .. "/../.."
-local ready_file_path = project_root .. "/runtime/soulbuddy-ready.txt"
+local runtime_directory = project_root .. "/runtime"
+local ready_file_path = runtime_directory .. "/soulbuddy-ready.txt"
+local request_file_path = runtime_directory .. "/soulbuddy-request.txt"
 local ready_message_printed = false
 
 local function file_exists(path)
@@ -19,23 +21,55 @@ local function file_exists(path)
     return true
 end
 
--- Called by the callback gate installed from game_version.lua. SoulBuddy refreshes
--- this timestamp several times per second, so a leftover file from a crashed process
--- cannot accidentally release the collector on the next launch.
+local function ensure_runtime_directory()
+    os.execute(
+        'if not exist "' .. runtime_directory ..
+        '" mkdir "' .. runtime_directory .. '"'
+    )
+end
+
+-- Every Lua start gets its own token. An older SoulBuddy runtime can keep writing
+-- heartbeats briefly while it shuts down, but those heartbeats cannot release this
+-- new collector because their token no longer matches.
+ensure_runtime_directory()
+local launch_token = tostring(os.time()) .. "-" ..
+    string.gsub(string.format("%.6f", os.clock()), "\\.", "_")
+
+local request_file, request_error = io.open(request_file_path, "w")
+if request_file ~= nil then
+    request_file:write(launch_token)
+    request_file:flush()
+    request_file:close()
+else
+    print("[SoulBuddy] Start-ID konnte nicht geschrieben werden: " .. tostring(request_error))
+    launch_token = nil
+end
+
+-- Called by the callback gate installed from game_version.lua. SoulBuddy writes the
+-- launch token it adopted plus a fresh timestamp. Both must match this Lua start.
 function soulbuddy_collector_ready()
+    if launch_token == nil then return false end
+
     local file = io.open(ready_file_path, "r")
     if file == nil then
         if not ready_message_printed then
-            print("[SoulBuddy] Warte, bis SoulBuddy für Collector-Daten bereit ist ...")
+            print("[SoulBuddy] Warte auf Run-Auswahl und Collector-Bereitschaft ...")
             ready_message_printed = true
         end
         return false
     end
 
+    local ready_token = file:read("*l") or ""
     local heartbeat = tonumber(file:read("*l") or "")
     file:close()
 
-    if heartbeat == nil then return false end
+    if ready_token ~= launch_token or heartbeat == nil then
+        if not ready_message_printed then
+            print("[SoulBuddy] Warte auf Run-Auswahl und Collector-Bereitschaft ...")
+            ready_message_printed = true
+        end
+        return false
+    end
 
     local age = math.abs(os.time() - heartbeat)
     local ready = age <= 5
@@ -80,7 +114,7 @@ local command = 'cmd /C start "" /B "' .. windows_executable .. '" --from-lua'
 local ok, result = pcall(os.execute, command)
 
 if ok then
-    print("[SoulBuddy] Desktop-Prozess automatisch gestartet/angefordert: " .. executable)
+    print("[SoulBuddy] Setup-Fenster automatisch gestartet/angefordert: " .. executable)
     return true
 end
 
