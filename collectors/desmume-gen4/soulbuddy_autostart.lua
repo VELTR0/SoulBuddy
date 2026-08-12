@@ -25,9 +25,9 @@ end
 
 -- In a source checkout the Debug build is normally the freshest executable while
 -- testing. SOULBUDDY_EXE can always override discovery for a published installation.
-candidates[#candidates + 1] = project_root .. "/SoulBuddy.exe"
 candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/SoulBuddy.exe"
 candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/win-x64/SoulBuddy.exe"
+candidates[#candidates + 1] = project_root .. "/SoulBuddy.exe"
 candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/SoulBuddy.exe"
 candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/win-x64/SoulBuddy.exe"
 candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/win-x64/publish/SoulBuddy.exe"
