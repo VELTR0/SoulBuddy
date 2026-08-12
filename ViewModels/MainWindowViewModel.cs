@@ -199,13 +199,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private void UpdateServerSyncStatus()
     {
         ServerSyncStatus = SoullockeClient.IsServerSynchronizationHealthy
-            ? "Live Daten werden mit Server synchronisiert"
+            ? "Server verbunden"
             : "Synchronisierung über Server nicht erfolgreich";
     }
 
     private void ApplyLiveState(PlayerLiveState state)
     {
-        LocalPlayerStatus = "Live-Daten werden vom Emulator empfangen";
+        LocalPlayerStatus = "Spiel verbunden";
         var active = state.ActivePokemon;
         LocalActivePokemonText = active is null
             ? "Aktives Pokémon: wird ermittelt …"
