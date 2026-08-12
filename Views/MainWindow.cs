@@ -103,10 +103,7 @@ public sealed class MainWindow : Window
             Padding = new Thickness(16, 9)
         };
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        var title = new StackPanel { Spacing = 1 };
-        title.Children.Add(Text("SoulBuddy", 23, FontWeight.Bold, "#F8FAFC"));
-        title.Children.Add(Text("Eigenständiger SoulLink- und Nuzlocke-Begleiter", 11, FontWeight.Normal, "#94A3B8"));
-        grid.Children.Add(title);
+        grid.Children.Add(Text("SoulBuddy", 23, FontWeight.Bold, "#F8FAFC"));
 
         var gameStatus = BoundText("LocalPlayerStatus", 10, FontWeight.Bold, "#A7F3D0");
         gameStatus.VerticalAlignment = VerticalAlignment.Center;
@@ -120,10 +117,50 @@ public sealed class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             Child = gameStatus
         };
-        Grid.SetColumn(badge, 1);
-        grid.Children.Add(badge);
+
+        var headerActions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { badge, BuildLanguageButton() }
+        };
+        Grid.SetColumn(headerActions, 1);
+        grid.Children.Add(headerActions);
+
         border.Child = grid;
         return border;
+    }
+
+    private static Button BuildLanguageButton()
+    {
+        var languageMenu = new MenuFlyout
+        {
+            Placement = FlyoutPlacementMode.BottomEdgeAlignedRight
+        };
+
+        languageMenu.Items.Add(new MenuItem { Header = "🇩🇪  Deutsch" });
+        languageMenu.Items.Add(new MenuItem { Header = "🇬🇧  English" });
+        languageMenu.Items.Add(new MenuItem { Header = "🇫🇷  Français" });
+        languageMenu.Items.Add(new MenuItem { Header = "🇪🇸  Español" });
+        languageMenu.Items.Add(new MenuItem { Header = "🇮🇹  Italiano" });
+        languageMenu.Items.Add(new MenuItem { Header = "🇯🇵  日本語" });
+
+        return new Button
+        {
+            Content = "🇩🇪",
+            Flyout = languageMenu,
+            Width = 42,
+            Height = 32,
+            Padding = new Thickness(6, 2),
+            FontSize = 17,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Background = Brush("#17243A"),
+            BorderBrush = Brush("#344763"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(9)
+        };
     }
 
     private Control BuildSessionPanel()
@@ -131,46 +168,54 @@ public sealed class MainWindow : Window
         var session = _sessionContext?.Session;
         var local = _sessionContext?.LocalPlayer;
 
-        var grid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("0.9*,Auto,1.25*,Auto,1.25*")
-        };
-
         var sessionStack = new StackPanel
         {
             Spacing = 3,
-            Margin = new Thickness(4, 2, 14, 2)
+            Margin = new Thickness(4, 2)
         };
         sessionStack.Children.Add(Text("AKTIVE SESSION", 9, FontWeight.Bold, "#93C5FD"));
         sessionStack.Children.Add(Text(session?.Name ?? "SoulLocke", 13, FontWeight.Bold, "#F8FAFC"));
-        var soullockeLink = Text(
+        var sessionLink = Text(
             _sessionContext is null || string.IsNullOrWhiteSpace(_sessionContext.SoullockeLink)
-                ? "SoulLocke"
-                : $"SoulLocke: {_sessionContext.SoullockeLink}",
+                ? "Session Link: –"
+                : $"Session Link: {_sessionContext.SoullockeLink}",
             10,
             FontWeight.Normal,
             "#CBD5E1");
-        soullockeLink.TextTrimming = TextTrimming.CharacterEllipsis;
-        sessionStack.Children.Add(soullockeLink);
-        grid.Children.Add(sessionStack);
+        sessionLink.TextTrimming = TextTrimming.CharacterEllipsis;
+        sessionStack.Children.Add(sessionLink);
 
-        var firstDivider = SectionDivider();
-        Grid.SetColumn(firstDivider, 1);
-        grid.Children.Add(firstDivider);
+        var sessionCard = new Border
+        {
+            Background = Brush("#151F33"),
+            BorderBrush = Brush("#2B3C58"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(9),
+            Padding = new Thickness(12, 10),
+            Child = sessionStack
+        };
+
+        var playersGrid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("1*,Auto,1*")
+        };
 
         var localStack = new StackPanel
         {
             Spacing = 3,
-            Margin = new Thickness(16, 2)
+            Margin = new Thickness(4, 2, 16, 2)
         };
-        localStack.Children.Add(Text(local is null ? "LOKALER SPIELER" : local.DisplayName.ToUpperInvariant(), 9, FontWeight.Bold, "#93C5FD"));
+        localStack.Children.Add(Text(
+            local is null ? "LOKALER SPIELER" : local.DisplayName.ToUpperInvariant(),
+            9,
+            FontWeight.Bold,
+            "#93C5FD"));
         localStack.Children.Add(BoundText("LocalActivePokemonText", 10, FontWeight.Normal, "#CBD5E1"));
-        Grid.SetColumn(localStack, 2);
-        grid.Children.Add(localStack);
+        playersGrid.Children.Add(localStack);
 
-        var secondDivider = SectionDivider();
-        Grid.SetColumn(secondDivider, 3);
-        grid.Children.Add(secondDivider);
+        var divider = SectionDivider();
+        Grid.SetColumn(divider, 1);
+        playersGrid.Children.Add(divider);
 
         var partnerStack = new StackPanel
         {
@@ -181,19 +226,29 @@ public sealed class MainWindow : Window
         var partnerStatus = BoundText("PartnerStatus", 10, FontWeight.Normal, "#A7F3D0");
         partnerStatus.TextWrapping = TextWrapping.Wrap;
         partnerStack.Children.Add(partnerStatus);
-        Grid.SetColumn(partnerStack, 4);
-        grid.Children.Add(partnerStack);
+        Grid.SetColumn(partnerStack, 2);
+        playersGrid.Children.Add(partnerStack);
 
-        return new Border
+        var playersCard = new Border
         {
             Background = Brush("#151F33"),
             BorderBrush = Brush("#2B3C58"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(9),
             Padding = new Thickness(12, 10),
-            Margin = new Thickness(16, 9, 16, 0),
-            Child = grid
+            Child = playersGrid
         };
+
+        var cards = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("0.85*,1.65*"),
+            ColumnSpacing = 12,
+            Margin = new Thickness(16, 9, 16, 0)
+        };
+        cards.Children.Add(sessionCard);
+        Grid.SetColumn(playersCard, 1);
+        cards.Children.Add(playersCard);
+        return cards;
     }
 
     private static Border SectionDivider() => new()
