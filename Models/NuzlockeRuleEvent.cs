@@ -3,6 +3,7 @@ namespace SoulBuddy.Models;
 public enum NuzlockeRuleEventType
 {
     PokemonKnockedOut,
+    PokemonBoxed,
     PartnerPokemonKnockedOut,
     CatchableEncounter,
     CatchSucceeded,
