@@ -1,7 +1,7 @@
 -- SoulBuddy local video bridge for DeSmuME.
 -- The upper DS screen is captured as DeSmuME's native GD string and written to a
--- per-Lua-instance runtime file. SoulBuddy can serve that frame locally. Incoming
--- frames are rendered as a 64x48 picture-in-picture on the upper screen.
+-- per-Lua-instance runtime file. SoulBuddy serves a downsized version locally.
+-- Incoming frames are rendered as a 64x48 picture-in-picture on the upper screen.
 
 if gui == nil then
     return false
@@ -32,11 +32,11 @@ end
 
 local capture_enabled_path = scoped_runtime_path("stream-capture.enabled")
 local outgoing_frame_path = scoped_runtime_path("stream-out.gd")
+local outgoing_sequence_path = scoped_runtime_path("stream-out.seq")
 local incoming_frame_path = scoped_runtime_path("stream-in.gd")
 
--- 10 FPS is deliberately lower than the first 15 FPS prototype. A full top-screen
--- GD string is about 192 KiB, so this significantly reduces Lua allocations and
--- disk churn while remaining smooth enough for the small partner preview.
+-- A full top-screen GD string is about 192 KiB. Ten captures per second keeps the
+-- local preview responsive without putting excessive pressure on DeSmuME's Lua VM.
 local capture_frame_interval = 6
 local incoming_read_frame_interval = 2
 local last_capture_frame = -1000
@@ -45,6 +45,7 @@ local incoming_frame_cache = nil
 local capture_warning_printed = false
 local overlay_warning_printed = false
 local capture_failure_count = 0
+local capture_sequence = 0
 
 local function file_exists(path)
     local file = io.open(path, "rb")
@@ -115,6 +116,10 @@ local function write_binary_atomic(path, data)
     return true
 end
 
+local function write_text_atomic(path, value)
+    return write_binary_atomic(path, tostring(value))
+end
+
 local function current_frame_number()
     if emu ~= nil and type(emu.framecount) == "function" then
         local ok, frame = pcall(emu.framecount)
@@ -160,12 +165,15 @@ local function capture_upper_screen(frame)
     end
 
     if write_binary_atomic(outgoing_frame_path, data) then
+        -- Do not infer freshness from file-system timestamps. Explicitly publish a
+        -- monotonically increasing capture sequence only after the complete frame
+        -- has been committed. SoulBuddy can therefore never mistake a fresh frame
+        -- for an old one because of timestamp caching/resolution.
+        capture_sequence = capture_sequence + 1
+        write_text_atomic(outgoing_sequence_path, capture_sequence)
         capture_failure_count = 0
     end
 
-    -- gdscreenshot creates a roughly 192 KiB Lua string every capture. Explicitly
-    -- release it and advance Lua's incremental collector so long-running streams do
-    -- not accumulate a large amount of temporary screenshot memory.
     data = nil
     if type(collectgarbage) == "function" then
         pcall(collectgarbage, "step", 256)
@@ -204,8 +212,8 @@ local function draw_incoming_frame()
     end
 
     -- The upper DS screen occupies y=-192..-1 in DeSmuME's Lua GUI coordinate
-    -- system. SoulBuddy downsizes incoming frames to 64x48. x=192/y=-192 keeps
-    -- the smaller video anchored in the upper-right corner of the top screen.
+    -- system. SoulBuddy sends incoming frames as 64x48. x=192/y=-192 keeps the
+    -- preview anchored in the upper-right corner of the top screen.
     pcall(gui.gdoverlay, 192, -192, incoming_frame_cache)
 end
 
@@ -225,5 +233,5 @@ else
     return false
 end
 
-print("[SoulBuddy Stream] Lokale Video-Bridge bereit (10 FPS Capture, 64x48 Overlay).")
+print("[SoulBuddy Stream] Lokale Video-Bridge bereit (10 FPS Capture, 64x48 Stream/Overlay).")
 return true
