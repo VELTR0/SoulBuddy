@@ -383,13 +383,15 @@ internal sealed class LocalStreamService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         var length = frame.Length;
-        Span<byte> prefix = stackalloc byte[4];
-        prefix[0] = (byte)(length >> 24);
-        prefix[1] = (byte)(length >> 16);
-        prefix[2] = (byte)(length >> 8);
-        prefix[3] = (byte)length;
+        var prefix = new byte[4]
+        {
+            (byte)(length >> 24),
+            (byte)(length >> 16),
+            (byte)(length >> 8),
+            (byte)length
+        };
 
-        await stream.WriteAsync(prefix.ToArray(), cancellationToken);
+        await stream.WriteAsync(prefix, cancellationToken);
         await stream.WriteAsync(frame, cancellationToken);
         await stream.FlushAsync(cancellationToken);
     }
@@ -558,17 +560,8 @@ internal sealed class LocalStreamService : IAsyncDisposable
         }
     }
 
-    private static async Task<long?> TryReadCaptureSequenceAsync(
+    private async Task<long?> TryReadCaptureSequenceAsync(
         CancellationToken cancellationToken)
-    {
-        // Placeholder overload is never used. The instance overload below supplies
-        // the scoped path while keeping the parsing logic in one place.
-        await Task.CompletedTask;
-        cancellationToken.ThrowIfCancellationRequested();
-        return null;
-    }
-
-    private async Task<long?> TryReadCaptureSequenceAsync(CancellationToken cancellationToken, bool scoped = true)
     {
         try
         {
