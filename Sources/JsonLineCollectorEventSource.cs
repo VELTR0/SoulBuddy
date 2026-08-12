@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using SoulBuddy.Models;
+using SoulBuddy.Services;
 
 namespace SoulBuddy.Sources;
 
@@ -29,8 +30,10 @@ public sealed class JsonLineCollectorEventSource
     {
         _eventFilePath = eventFilePath;
         var runtimeDirectory = Path.GetDirectoryName(eventFilePath) ?? ".";
-        _readyFilePath = Path.Combine(runtimeDirectory, "soulbuddy-ready.txt");
-        _requestFilePath = Path.Combine(runtimeDirectory, "soulbuddy-request.txt");
+        _readyFilePath = LuaLaunchContext.ScopePath(
+            Path.Combine(runtimeDirectory, "soulbuddy-ready.txt"));
+        _requestFilePath = LuaLaunchContext.ScopePath(
+            Path.Combine(runtimeDirectory, "soulbuddy-request.txt"));
         _readyToken = ReadCollectorRequestToken();
         _partySource = partySource;
         _liveStateSource = liveStateSource;
