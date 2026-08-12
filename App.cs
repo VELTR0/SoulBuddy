@@ -57,7 +57,8 @@ public sealed class App : Application
         {
             desktop.MainWindow = existingSetup;
             existingSetup.ShowInTaskbar = true;
-            existingSetup.Show();
+            if (!existingSetup.IsVisible)
+                existingSetup.Show();
             existingSetup.Activate();
             return;
         }
