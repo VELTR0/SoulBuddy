@@ -74,6 +74,9 @@ public sealed class OverlayMessageWriter
             NuzlockeRuleEventType.PartnerPokemonKnockedOut =>
                 FormatPartnerKnockout(ruleEvent),
 
+            NuzlockeRuleEventType.PartnerPokemonBoxed =>
+                FormatPartnerBoxed(ruleEvent),
+
             NuzlockeRuleEventType.CatchableEncounter when ruleEvent.IsShiny =>
                 $"Shiny {name} fangbar!",
 
@@ -97,6 +100,15 @@ public sealed class OverlayMessageWriter
             : ShortPokemonName(ruleEvent.LinkedSpeciesName, ruleEvent.LinkedNickname);
 
         return $"Partner K.O. - {linkedName} raus!";
+    }
+
+    private static string FormatPartnerBoxed(NuzlockeRuleEvent ruleEvent)
+    {
+        var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
+            ? "Verknüpftes Pokémon"
+            : ShortPokemonName(ruleEvent.LinkedSpeciesName, ruleEvent.LinkedNickname);
+
+        return $"Partner hat eingeboxt - {linkedName} ebenfalls in die Box!";
     }
 
     private static string ShortPokemonName(string species, string? nickname) =>
