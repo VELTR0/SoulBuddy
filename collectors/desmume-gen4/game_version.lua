@@ -15,6 +15,15 @@ if autostart_result ~= true then
     error("SoulBuddy ist nicht bereit. Collector wird nicht initialisiert.")
 end
 
+-- Video is optional. A failure here must never prevent the normal collector,
+-- SoulLink sync or rule-event overlay from starting.
+local stream_ok, stream_result = pcall(function()
+    return dofile "soulbuddy_stream.lua"
+end)
+if not stream_ok then
+    print("[SoulBuddy Stream] Video-Bridge konnte nicht geladen werden: " .. tostring(stream_result))
+end
+
 --for different game versions
 -- 1 = Ruby/Sapphire U, 2 = Emerald U, 3 = FireRed/LeafGreen U, 4 = Ruby/Sapphire J, 5 = Emerald J (TODO),
 -- 6 = FireRed/LeafGreen J (1360)
