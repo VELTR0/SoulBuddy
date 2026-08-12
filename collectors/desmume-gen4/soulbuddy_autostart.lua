@@ -10,9 +10,6 @@ end
 local directory = string.match(source, "^(.*)[/\\]") or "."
 local project_root = directory .. "/../.."
 local runtime_directory = project_root .. "/runtime"
-local ready_file_path = runtime_directory .. "/soulbuddy-ready.txt"
-local request_file_path = runtime_directory .. "/soulbuddy-request.txt"
-local stop_file_path = runtime_directory .. "/soulbuddy-lua-stopped.txt"
 local ready_message_printed = false
 local stop_notified = false
 
@@ -48,11 +45,64 @@ local function ensure_runtime_directory()
     os.execute(command)
 end
 
--- Every Lua start gets its own token. An older SoulBuddy runtime can keep writing
--- heartbeats briefly while it shuts down, but those heartbeats cannot release this
--- new collector because their token no longer matches.
+-- Every Lua start gets its own token. Besides protecting the startup handshake,
+-- this token now scopes all collector/overlay/video runtime files so two DeSmuME
+-- instances can run from the same SoulBuddy checkout without overwriting each other.
 ensure_runtime_directory()
 local launch_token = tostring(os.time()) .. "-" .. string.format("%.6f", os.clock())
+local safe_launch_token = string.gsub(launch_token, "[^%w%-_]", "_")
+
+_G.SOULBUDDY_LAUNCH_TOKEN = launch_token
+_G.SOULBUDDY_SAFE_LAUNCH_TOKEN = safe_launch_token
+
+local function scoped_runtime_path(file_name)
+    local stem, extension = string.match(file_name, "^(.*)(%.[^.]*)$")
+    if stem == nil then
+        stem = file_name
+        extension = ""
+    end
+    return runtime_directory .. "/" .. stem .. "." .. safe_launch_token .. extension
+end
+
+local ready_file_path = scoped_runtime_path("soulbuddy-ready.txt")
+local request_file_path = scoped_runtime_path("soulbuddy-request.txt")
+local stop_file_path = scoped_runtime_path("soulbuddy-lua-stopped.txt")
+
+-- The existing collector scripts intentionally keep their simple, generic runtime
+-- paths. Remap only those three known files for this Lua process. Other io.open calls
+-- (ROM helpers, stream files, etc.) remain untouched.
+local native_io_open = io.open
+_G.SOULBUDDY_NATIVE_IO_OPEN = native_io_open
+
+local scoped_collector_names = {
+    ["party.json"] = true,
+    ["emulator-events.jsonl"] = true,
+    ["overlay-events.jsonl"] = true
+}
+
+local function scope_collector_path(path)
+    if type(path) ~= "string" then return path end
+
+    local normalized = string.gsub(path, "\\", "/")
+    for file_name, _ in pairs(scoped_collector_names) do
+        if #normalized >= #file_name and
+           string.sub(normalized, -#file_name) == file_name then
+            local stem, extension = string.match(file_name, "^(.*)(%.[^.]*)$")
+            if stem == nil then
+                stem = file_name
+                extension = ""
+            end
+            local scoped_name = stem .. "." .. safe_launch_token .. extension
+            return string.sub(path, 1, #path - #file_name) .. scoped_name
+        end
+    end
+
+    return path
+end
+
+io.open = function(path, mode)
+    return native_io_open(scope_collector_path(path), mode)
+end
 
 local request_file, request_error = io.open(request_file_path, "w")
 if request_file ~= nil then
@@ -184,9 +234,11 @@ end
 local command
 if is_windows then
     local windows_executable = string.gsub(executable, "/", "\\")
-    command = 'cmd /C start "" /B "' .. windows_executable .. '" --from-lua'
+    command = 'cmd /C start "" /B "' .. windows_executable ..
+        '" --from-lua --lua-token "' .. launch_token .. '"'
 else
-    command = 'nohup "' .. executable .. '" --from-lua >/dev/null 2>&1 &'
+    command = 'nohup "' .. executable .. '" --from-lua --lua-token "' ..
+        launch_token .. '" >/dev/null 2>&1 &'
 end
 
 local call_ok, result, reason, code = pcall(os.execute, command)
