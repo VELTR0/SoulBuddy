@@ -44,9 +44,9 @@ public sealed class MainWindow : Window
             ? "SoulBuddy"
             : $"SoulBuddy · {sessionContext.Session.Name} · {sessionContext.LocalPlayer.DisplayName}";
         Width = 1380;
-        Height = 900;
-        MinWidth = 620;
-        MinHeight = 500;
+        Height = 1400;
+        MinWidth = 550;
+        MinHeight = 450;
         Background = Brush("#0B1220");
         DataContext = _viewModel;
 
