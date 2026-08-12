@@ -34,13 +34,17 @@ local capture_enabled_path = scoped_runtime_path("stream-capture.enabled")
 local outgoing_frame_path = scoped_runtime_path("stream-out.gd")
 local incoming_frame_path = scoped_runtime_path("stream-in.gd")
 
-local capture_frame_interval = 4 -- ~15 FPS at the normal 60 FPS emulation rate.
+-- 10 FPS is deliberately lower than the first 15 FPS prototype. A full top-screen
+-- GD string is about 192 KiB, so this significantly reduces Lua allocations and
+-- disk churn while remaining smooth enough for the small partner preview.
+local capture_frame_interval = 6
 local incoming_read_frame_interval = 2
 local last_capture_frame = -1000
 local last_incoming_read_frame = -1000
 local incoming_frame_cache = nil
 local capture_warning_printed = false
 local overlay_warning_printed = false
+local capture_failure_count = 0
 
 local function file_exists(path)
     local file = io.open(path, "rb")
@@ -127,6 +131,12 @@ local function capture_upper_screen(frame)
         return
     end
 
+    -- A savestate/movie reset can move DeSmuME's frame counter backwards. Without
+    -- this reset the old subtraction check could suppress capture indefinitely.
+    if frame < last_capture_frame then
+        last_capture_frame = frame - capture_frame_interval
+    end
+
     if frame - last_capture_frame < capture_frame_interval then
         return
     end
@@ -142,13 +152,31 @@ local function capture_upper_screen(frame)
 
     local ok, data = pcall(gui.gdscreenshot, "top")
     if not ok or not valid_gd_frame(data) then
+        capture_failure_count = capture_failure_count + 1
+        if capture_failure_count == 30 then
+            print("[SoulBuddy Stream] Warnung: 30 Screenshot-Frames konnten nacheinander nicht gelesen werden.")
+        end
         return
     end
 
-    write_binary_atomic(outgoing_frame_path, data)
+    if write_binary_atomic(outgoing_frame_path, data) then
+        capture_failure_count = 0
+    end
+
+    -- gdscreenshot creates a roughly 192 KiB Lua string every capture. Explicitly
+    -- release it and advance Lua's incremental collector so long-running streams do
+    -- not accumulate a large amount of temporary screenshot memory.
+    data = nil
+    if type(collectgarbage) == "function" then
+        pcall(collectgarbage, "step", 256)
+    end
 end
 
 local function refresh_incoming_frame(frame)
+    if frame < last_incoming_read_frame then
+        last_incoming_read_frame = frame - incoming_read_frame_interval
+    end
+
     if frame - last_incoming_read_frame < incoming_read_frame_interval then
         return
     end
@@ -197,5 +225,5 @@ else
     return false
 end
 
-print("[SoulBuddy Stream] Lokale Video-Bridge bereit.")
+print("[SoulBuddy Stream] Lokale Video-Bridge bereit (10 FPS Capture, 64x48 Overlay).")
 return true
