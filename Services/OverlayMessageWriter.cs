@@ -59,7 +59,7 @@ public sealed class OverlayMessageWriter
             ? linkedSpecies
             : partnerBox.LinkedNickname!;
 
-        WriteMessage($"{partnerName} (Partner von {linkedName}) wurde in die Box gelegt!");
+        WriteMessage($"{partnerName} boxed! (Linked: {linkedName})");
         Console.WriteLine(
             $"SoulLink-Event: {partnerName} wurde in {partnerBox.Location} eingeboxt; " +
             $"verknüpft mit {linkedName}.");
@@ -157,7 +157,7 @@ public sealed class OverlayMessageWriter
             ? linkedSpecies
             : ruleEvent.LinkedNickname!;
 
-        return $"{partnerName} (Partner von {linkedName}) wurde in die Box gelegt!";
+        return $"{partnerName} boxed! (Linked:{linkedName})";
     }
 
     private string ResolveSpeciesName(int speciesId, string? fallback)
