@@ -1,7 +1,7 @@
 -- SoulBuddy local video bridge for DeSmuME.
 -- The upper DS screen is captured as DeSmuME's native GD string and written to a
 -- per-Lua-instance runtime file. SoulBuddy can serve that frame locally. Incoming
--- frames are rendered as a 128x96 picture-in-picture on the upper screen.
+-- frames are rendered as a 64x48 picture-in-picture on the upper screen.
 
 if gui == nil then
     return false
@@ -176,9 +176,9 @@ local function draw_incoming_frame()
     end
 
     -- The upper DS screen occupies y=-192..-1 in DeSmuME's Lua GUI coordinate
-    -- system. SoulBuddy downsizes incoming frames to 128x96, so x=128/y=-192
-    -- places the video in the upper-right quarter of the top screen.
-    pcall(gui.gdoverlay, 128, -192, incoming_frame_cache)
+    -- system. SoulBuddy downsizes incoming frames to 64x48. x=192/y=-192 keeps
+    -- the smaller video anchored in the upper-right corner of the top screen.
+    pcall(gui.gdoverlay, 192, -192, incoming_frame_cache)
 end
 
 local function stream_frame_callback()
