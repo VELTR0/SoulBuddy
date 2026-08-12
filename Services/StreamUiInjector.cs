@@ -198,7 +198,7 @@ internal static class StreamUiInjector
             root.Children.Add(Card(outgoingPanel));
 
             root.Children.Add(Text(
-                "Der empfangene Stream erscheint als 128×96-Picture-in-Picture oben rechts im oberen DeSmuME-Bildschirm. SoulBuddy-Meldungen werden weiterhin darüber gezeichnet.",
+                "Der empfangene Stream erscheint als 64×48-Picture-in-Picture oben rechts im oberen DeSmuME-Bildschirm. SoulBuddy-Meldungen werden weiterhin darüber gezeichnet.",
                 9,
                 FontWeight.Normal,
                 "#7C8BA1",
