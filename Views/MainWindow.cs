@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -26,6 +27,12 @@ public sealed class MainWindow : Window
         Spacing = 7,
         Margin = new Thickness(0, 0, 8, 0)
     };
+    private Border? _gameStatusBadge;
+    private Border? _gameStatusDot;
+    private TextBlock? _gameStatusText;
+    private Border? _serverStatusBadge;
+    private Border? _serverStatusDot;
+    private TextBlock? _serverStatusText;
     private bool _compact;
 
     public MainWindow(SessionContext? sessionContext = null)
@@ -44,6 +51,7 @@ public sealed class MainWindow : Window
 
         _viewModel.Party.CollectionChanged += (_, _) => RenderParty();
         _viewModel.StoredPokemon.CollectionChanged += (_, _) => RenderStoredPokemon();
+        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
 
         Content = BuildLayout();
         Opened += OnOpened;
@@ -93,23 +101,23 @@ public sealed class MainWindow : Window
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         grid.Children.Add(Text("SoulBuddy", 23, FontWeight.Bold, "#F8FAFC"));
 
-        var gameBadge = BuildStatusBadge(
+        _gameStatusBadge = BuildStatusBadge(
             "LocalPlayerStatus",
-            "#123128",
-            "#2F765E",
-            "#A7F3D0");
-        var serverBadge = BuildStatusBadge(
+            IsEmulatorConnected(),
+            out _gameStatusDot,
+            out _gameStatusText);
+        _serverStatusBadge = BuildStatusBadge(
             "ServerSyncStatus",
-            "#17243A",
-            "#344763",
-            "#BFDBFE");
+            IsServerConnected(),
+            out _serverStatusDot,
+            out _serverStatusText);
 
         var headerActions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
             VerticalAlignment = VerticalAlignment.Center,
-            Children = { gameBadge, serverBadge, BuildLanguageButton() }
+            Children = { _gameStatusBadge, _serverStatusBadge, BuildLanguageButton() }
         };
         Grid.SetColumn(headerActions, 1);
         grid.Children.Add(headerActions);
@@ -120,22 +128,91 @@ public sealed class MainWindow : Window
 
     private static Border BuildStatusBadge(
         string binding,
-        string background,
-        string borderColor,
-        string foreground)
+        bool connected,
+        out Border dot,
+        out TextBlock status)
     {
-        var status = BoundText(binding, 10, FontWeight.Bold, foreground);
+        status = BoundText(
+            binding,
+            10,
+            FontWeight.Bold,
+            connected ? "#A7F3D0" : "#FDE68A");
         status.VerticalAlignment = VerticalAlignment.Center;
+
+        dot = new Border
+        {
+            Width = 7,
+            Height = 7,
+            CornerRadius = new CornerRadius(4),
+            Background = Brush(connected ? "#4ADE80" : "#FBBF24"),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 7,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { dot, status }
+        };
+
         return new Border
         {
-            Background = Brush(background),
-            BorderBrush = Brush(borderColor),
+            Background = Brush(connected ? "#123128" : "#2A2111"),
+            BorderBrush = Brush(connected ? "#2F765E" : "#D97706"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(14),
             Padding = new Thickness(10, 5),
             VerticalAlignment = VerticalAlignment.Center,
-            Child = status
+            Child = content
         };
+    }
+
+    private static void ApplyStatusBadgeState(
+        Border? badge,
+        Border? dot,
+        TextBlock? status,
+        bool connected)
+    {
+        if (badge is null || dot is null || status is null)
+            return;
+
+        badge.Background = Brush(connected ? "#123128" : "#2A2111");
+        badge.BorderBrush = Brush(connected ? "#2F765E" : "#D97706");
+        dot.Background = Brush(connected ? "#4ADE80" : "#FBBF24");
+        status.Foreground = Brush(connected ? "#A7F3D0" : "#FDE68A");
+    }
+
+    private bool IsEmulatorConnected() =>
+        string.Equals(
+            _viewModel.LocalPlayerStatus,
+            "Live-Daten werden vom Emulator empfangen",
+            StringComparison.Ordinal);
+
+    private bool IsServerConnected() =>
+        string.Equals(
+            _viewModel.ServerSyncStatus,
+            "Live Daten werden mit Server synchronisiert",
+            StringComparison.Ordinal);
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
+    {
+        if (eventArgs.PropertyName == nameof(MainWindowViewModel.LocalPlayerStatus))
+        {
+            ApplyStatusBadgeState(
+                _gameStatusBadge,
+                _gameStatusDot,
+                _gameStatusText,
+                IsEmulatorConnected());
+        }
+        else if (eventArgs.PropertyName == nameof(MainWindowViewModel.ServerSyncStatus))
+        {
+            ApplyStatusBadgeState(
+                _serverStatusBadge,
+                _serverStatusDot,
+                _serverStatusText,
+                IsServerConnected());
+        }
     }
 
     private static Button BuildLanguageButton()
@@ -645,6 +722,7 @@ public sealed class MainWindow : Window
 
     private async void OnClosing(object? sender, WindowClosingEventArgs eventArgs)
     {
+        _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
         await _viewModel.DisposeAsync();
         _visualService.Dispose();
     }
