@@ -23,14 +23,14 @@ if configured_path ~= nil and configured_path ~= "" then
     candidates[#candidates + 1] = configured_path
 end
 
--- Prefer a published/release build, but keep Debug as a convenient development
--- fallback. A manually copied SoulBuddy.exe in the project root also works.
+-- In a source checkout the Debug build is normally the freshest executable while
+-- testing. SOULBUDDY_EXE can always override discovery for a published installation.
 candidates[#candidates + 1] = project_root .. "/SoulBuddy.exe"
-candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/win-x64/publish/SoulBuddy.exe"
-candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/win-x64/SoulBuddy.exe"
-candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/SoulBuddy.exe"
-candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/win-x64/SoulBuddy.exe"
 candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/SoulBuddy.exe"
+candidates[#candidates + 1] = project_root .. "/bin/Debug/net8.0/win-x64/SoulBuddy.exe"
+candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/SoulBuddy.exe"
+candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/win-x64/SoulBuddy.exe"
+candidates[#candidates + 1] = project_root .. "/bin/Release/net8.0/win-x64/publish/SoulBuddy.exe"
 
 local executable = nil
 for _, candidate in ipairs(candidates) do
