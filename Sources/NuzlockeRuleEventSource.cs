@@ -335,6 +335,31 @@ public sealed class NuzlockeRuleEventSource
         });
     }
 
+    public void PublishPartnerPokemonBoxed(
+        string partnerPlayerName,
+        int partnerSpeciesId,
+        string partnerSpeciesName,
+        string? partnerNickname,
+        string locationName,
+        int? linkedSpeciesId,
+        string? linkedSpeciesName,
+        string? linkedNickname)
+    {
+        Publish(new NuzlockeRuleEvent
+        {
+            Type = NuzlockeRuleEventType.PartnerPokemonBoxed,
+            OccurredAt = DateTimeOffset.Now,
+            SpeciesId = partnerSpeciesId,
+            SpeciesName = partnerSpeciesName,
+            Nickname = partnerNickname,
+            LocationName = locationName,
+            PartnerPlayerName = partnerPlayerName,
+            LinkedSpeciesId = linkedSpeciesId,
+            LinkedSpeciesName = linkedSpeciesName,
+            LinkedNickname = linkedNickname
+        });
+    }
+
     private NuzlockeRuleEvent? TryResolveCaughtPokemon(PartyPokemon pokemon)
     {
         lock (_catchSync)
@@ -501,6 +526,15 @@ public sealed class NuzlockeRuleEventSource
                 Console.WriteLine(
                     $"SoulLink-Event: Partner-Pokémon {name} ist K.O. gegangen. " +
                     $"{linkedName} muss abgelegt werden.");
+                break;
+
+            case NuzlockeRuleEventType.PartnerPokemonBoxed:
+                var linkedBoxName = string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
+                    ? "Das verbundene Pokémon"
+                    : FormatPokemon(ruleEvent.LinkedSpeciesName, ruleEvent.LinkedNickname);
+                Console.WriteLine(
+                    $"SoulLink-Event: Partner hat {name} eingeboxt. " +
+                    $"{linkedBoxName} muss ebenfalls in die Box.");
                 break;
 
             case NuzlockeRuleEventType.CatchableEncounter:
