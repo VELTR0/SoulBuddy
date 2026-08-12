@@ -23,9 +23,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private string _liveEncounterTitle = "LIVE-STATUS";
     private string _liveEncounterText = "Warte auf Live-Daten aus dem Emulator …";
     private string _localPlayerStatus = "Emulator wird gesucht …";
+    private string _serverSyncStatus = "Synchronisierung über Server nicht erfolgreich";
     private string _localGameText = "Spiel: unbekannt";
     private string _localActivePokemonText = "Aktives Pokémon: wird ermittelt …";
-    private string _partnerStatus = "SoulLocke · Partnerdaten werden geladen …";
+    private string _partnerStatus = "Partnerdaten werden geladen …";
 
     public MainWindowViewModel()
     {
@@ -96,6 +97,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         private set => SetProperty(ref _localPlayerStatus, value);
     }
 
+    public string ServerSyncStatus
+    {
+        get => _serverSyncStatus;
+        private set => SetProperty(ref _serverSyncStatus, value);
+    }
+
     public string LocalGameText
     {
         get => _localGameText;
@@ -122,9 +129,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             _runtime.PlayerLiveStateSource.StateChanged += OnLiveStateChanged;
             _runtime.Start();
 
-            ConnectionText = "SoulLocke verbunden";
-            LocalPlayerStatus = "🟢 Spiel verbunden: HeartGold / SoulSilver";
-            PartnerStatus = $"🟢 SoulLocke · {_runtime.SyncService.PartnerPlayerName ?? "Partner"}";
+            PartnerStatus = _runtime.SyncService.PartnerPlayerName ?? "Partner";
+            UpdateServerSyncStatus();
             AddActivity("SoulBuddy gestartet");
             AddActivity("Emulator-Collector verbunden");
 
@@ -134,7 +140,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         }
         catch (Exception ex)
         {
-            LocalPlayerStatus = "🔴 Collector nicht verbunden";
+            LocalPlayerStatus = "Collector nicht verbunden";
+            ServerSyncStatus = "Synchronisierung über Server nicht erfolgreich";
             StatusText = $"Startfehler: {ex.Message}";
             AddActivity($"Startfehler: {ex.Message}");
         }
@@ -175,13 +182,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
             PartyCountText = $"{Party.Count} / 6";
             PokemonCountText = $"{StoredPokemon.Count} Pokémon";
-            ConnectionText = "SoulLocke verbunden";
-            PartnerStatus = $"🟢 SoulLocke · {_runtime.SyncService.PartnerPlayerName ?? "Partner"}";
-            StatusText = $"Collector aktiv · Letzte Aktualisierung {DateTime.Now:HH:mm:ss}";
+            PartnerStatus = _runtime.SyncService.PartnerPlayerName ?? "Partner";
+            UpdateServerSyncStatus();
         }
         catch (Exception ex)
         {
             StatusText = $"Aktualisierungsfehler: {ex.Message}";
+            UpdateServerSyncStatus();
         }
         finally
         {
@@ -189,9 +196,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         }
     }
 
+    private void UpdateServerSyncStatus()
+    {
+        ServerSyncStatus = SoullockeClient.IsServerSynchronizationHealthy
+            ? "Live Daten werden mit Server synchronisiert"
+            : "Synchronisierung über Server nicht erfolgreich";
+    }
+
     private void ApplyLiveState(PlayerLiveState state)
     {
-        LocalPlayerStatus = "🟢 Live-Daten werden empfangen";
+        LocalPlayerStatus = "Live-Daten werden vom Emulator empfangen";
         var active = state.ActivePokemon;
         LocalActivePokemonText = active is null
             ? "Aktives Pokémon: wird ermittelt …"
