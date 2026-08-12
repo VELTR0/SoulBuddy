@@ -5,8 +5,10 @@ namespace SoulBuddy;
 
 internal static class Program
 {
-    private const string SingleInstanceMutexName = @"Local\SoulBuddy.SingleInstance";
-    private const string ShowSetupEventName = @"Local\SoulBuddy.ShowSetup";
+    // Keep the names valid on both Windows and Unix-based systems such as macOS.
+    // The previous Local\ prefix was Windows-specific and unnecessary here.
+    private const string SingleInstanceMutexName = "SoulBuddy.SingleInstance";
+    private const string ShowSetupEventName = "SoulBuddy.ShowSetup";
 
     [STAThread]
     public static void Main(string[] args)
