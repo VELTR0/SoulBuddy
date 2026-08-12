@@ -109,7 +109,8 @@ public sealed class App : Application
         if (string.IsNullOrWhiteSpace(runtimeDirectory))
             return;
 
-        var requestFilePath = Path.Combine(runtimeDirectory, "soulbuddy-request.txt");
+        var requestFilePath = LuaLaunchContext.ScopePath(
+            Path.Combine(runtimeDirectory, "soulbuddy-request.txt"));
         var launchToken = TryReadSignalToken(requestFilePath);
 
         // A manually launched headless SoulBuddy has no active Lua request and must
@@ -117,7 +118,8 @@ public sealed class App : Application
         if (string.IsNullOrWhiteSpace(launchToken))
             return;
 
-        var stopFilePath = Path.Combine(runtimeDirectory, "soulbuddy-lua-stopped.txt");
+        var stopFilePath = LuaLaunchContext.ScopePath(
+            Path.Combine(runtimeDirectory, "soulbuddy-lua-stopped.txt"));
         _headlessLuaLaunchToken = launchToken;
         _headlessLuaStopWatchCancellation = new CancellationTokenSource();
         _headlessLuaStopWatchTask = WatchHeadlessLuaStopAsync(
