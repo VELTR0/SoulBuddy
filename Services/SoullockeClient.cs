@@ -38,8 +38,10 @@ public sealed class SoullockeClient
     {
         _httpClient = httpClient;
         _config = config;
+        IsServerSynchronizationHealthy = false;
     }
 
+    public static bool IsServerSynchronizationHealthy { get; private set; }
     public string? PartnerPlayerName => _partnerPlayerName;
     public string SessionGameName => _sessionGameName;
 
@@ -552,13 +554,21 @@ public sealed class SoullockeClient
 
         try
         {
-            return await send(timeout.Token);
+            var response = await send(timeout.Token);
+            IsServerSynchronizationHealthy = response.IsSuccessStatusCode;
+            return response;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            IsServerSynchronizationHealthy = false;
             throw new TimeoutException(
                 $"Zeitüberschreitung beim Vorgang '{operation}' nach " +
                 $"{RequestTimeout.TotalSeconds:0} Sekunden.");
+        }
+        catch
+        {
+            IsServerSynchronizationHealthy = false;
+            throw;
         }
     }
 
