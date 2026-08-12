@@ -52,7 +52,7 @@ public sealed class MainWindow : Window
 
     private Control BuildLayout()
     {
-        var root = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto") };
+        var root = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*") };
         root.Children.Add(BuildHeader());
 
         var sessionPanel = BuildSessionPanel();
@@ -77,19 +77,6 @@ public sealed class MainWindow : Window
         content.Children.Add(right);
         root.Children.Add(content);
 
-        var footer = new Border
-        {
-            Background = Brush("#101A2E"),
-            BorderBrush = Brush("#263650"),
-            BorderThickness = new Thickness(0, 1, 0, 0),
-            Padding = new Thickness(14, 7)
-        };
-        var connection = BoundText("ConnectionText", 11, FontWeight.SemiBold, "#7DD3FC");
-        connection.HorizontalAlignment = HorizontalAlignment.Right;
-        footer.Child = connection;
-        Grid.SetRow(footer, 3);
-        root.Children.Add(footer);
-
         return root;
     }
 
@@ -105,31 +92,49 @@ public sealed class MainWindow : Window
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         grid.Children.Add(Text("SoulBuddy", 23, FontWeight.Bold, "#F8FAFC"));
 
-        var gameStatus = BoundText("LocalPlayerStatus", 10, FontWeight.Bold, "#A7F3D0");
-        gameStatus.VerticalAlignment = VerticalAlignment.Center;
-        var badge = new Border
-        {
-            Background = Brush("#123128"),
-            BorderBrush = Brush("#2F765E"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(14),
-            Padding = new Thickness(10, 5),
-            VerticalAlignment = VerticalAlignment.Center,
-            Child = gameStatus
-        };
+        var gameBadge = BuildStatusBadge(
+            "LocalPlayerStatus",
+            "#123128",
+            "#2F765E",
+            "#A7F3D0");
+        var serverBadge = BuildStatusBadge(
+            "ServerSyncStatus",
+            "#17243A",
+            "#344763",
+            "#BFDBFE");
 
         var headerActions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 8,
             VerticalAlignment = VerticalAlignment.Center,
-            Children = { badge, BuildLanguageButton() }
+            Children = { gameBadge, serverBadge, BuildLanguageButton() }
         };
         Grid.SetColumn(headerActions, 1);
         grid.Children.Add(headerActions);
 
         border.Child = grid;
         return border;
+    }
+
+    private static Border BuildStatusBadge(
+        string binding,
+        string background,
+        string borderColor,
+        string foreground)
+    {
+        var status = BoundText(binding, 10, FontWeight.Bold, foreground);
+        status.VerticalAlignment = VerticalAlignment.Center;
+        return new Border
+        {
+            Background = Brush(background),
+            BorderBrush = Brush(borderColor),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(14),
+            Padding = new Thickness(10, 5),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = status
+        };
     }
 
     private static Button BuildLanguageButton()
@@ -164,23 +169,67 @@ public sealed class MainWindow : Window
     {
         var session = _sessionContext?.Session;
         var local = _sessionContext?.LocalPlayer;
+        var sessionLinkValue = _sessionContext?.SoullockeLink ?? string.Empty;
 
         var sessionStack = new StackPanel
         {
-            Spacing = 3,
+            Spacing = 5,
             Margin = new Thickness(4, 2)
         };
         sessionStack.Children.Add(Text("AKTIVE SESSION", 9, FontWeight.Bold, "#93C5FD"));
         sessionStack.Children.Add(Text(session?.Name ?? "SoulLocke", 13, FontWeight.Bold, "#F8FAFC"));
-        var sessionLink = Text(
-            _sessionContext is null || string.IsNullOrWhiteSpace(_sessionContext.SoullockeLink)
-                ? "Session Link: –"
-                : $"Session Link: {_sessionContext.SoullockeLink}",
-            10,
-            FontWeight.Normal,
-            "#CBD5E1");
-        sessionLink.TextTrimming = TextTrimming.CharacterEllipsis;
-        sessionStack.Children.Add(sessionLink);
+
+        var sessionLinkRow = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
+            ColumnSpacing = 7
+        };
+        var sessionLinkLabel = Text("Session Link:", 10, FontWeight.Normal, "#CBD5E1");
+        sessionLinkLabel.VerticalAlignment = VerticalAlignment.Center;
+        sessionLinkRow.Children.Add(sessionLinkLabel);
+
+        var sessionLinkBox = new TextBox
+        {
+            Text = string.IsNullOrWhiteSpace(sessionLinkValue) ? "–" : sessionLinkValue,
+            IsReadOnly = true,
+            FontSize = 10,
+            Foreground = Brush("#E2E8F0"),
+            Background = Brush("#0F1829"),
+            BorderBrush = Brush("#344763"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(7, 4),
+            MinWidth = 0,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        Grid.SetColumn(sessionLinkBox, 1);
+        sessionLinkRow.Children.Add(sessionLinkBox);
+
+        var copyButton = new Button
+        {
+            Content = "Kopieren",
+            IsEnabled = !string.IsNullOrWhiteSpace(sessionLinkValue),
+            Padding = new Thickness(9, 4),
+            FontSize = 10,
+            FontWeight = FontWeight.SemiBold,
+            Background = Brush("#17243A"),
+            Foreground = Brush("#E2E8F0"),
+            BorderBrush = Brush("#344763"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6)
+        };
+        copyButton.Click += async (_, _) =>
+        {
+            if (string.IsNullOrWhiteSpace(sessionLinkValue))
+                return;
+
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard is not null)
+                await clipboard.SetTextAsync(sessionLinkValue);
+        };
+        Grid.SetColumn(copyButton, 2);
+        sessionLinkRow.Children.Add(copyButton);
+        sessionStack.Children.Add(sessionLinkRow);
 
         var sessionCard = new Border
         {
