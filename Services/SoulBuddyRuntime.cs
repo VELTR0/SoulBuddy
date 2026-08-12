@@ -95,6 +95,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         var partyJsonPath = Path.IsPathRooted(config.PartyJsonPath)
             ? Path.GetFullPath(config.PartyJsonPath)
             : Path.GetFullPath(Path.Combine(configDirectory, config.PartyJsonPath));
+        partyJsonPath = LuaLaunchContext.ScopePath(partyJsonPath);
 
         var runtimeDirectory = Path.GetDirectoryName(partyJsonPath);
         if (string.IsNullOrWhiteSpace(runtimeDirectory))
@@ -105,8 +106,10 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
 
         Directory.CreateDirectory(runtimeDirectory);
 
-        var eventFilePath = Path.Combine(runtimeDirectory, "emulator-events.jsonl");
-        var overlayEventFilePath = Path.Combine(runtimeDirectory, "overlay-events.jsonl");
+        var eventFilePath = LuaLaunchContext.ScopePath(
+            Path.Combine(runtimeDirectory, "emulator-events.jsonl"));
+        var overlayEventFilePath = LuaLaunchContext.ScopePath(
+            Path.Combine(runtimeDirectory, "overlay-events.jsonl"));
         var databasePath = BuildDatabasePath(configDirectory, config);
         var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         var snapshotPartySource = new JsonPartySource(partyJsonPath);
