@@ -32,8 +32,7 @@ end
 -- heartbeats briefly while it shuts down, but those heartbeats cannot release this
 -- new collector because their token no longer matches.
 ensure_runtime_directory()
-local launch_token = tostring(os.time()) .. "-" ..
-    string.gsub(string.format("%.6f", os.clock()), "\\.", "_")
+local launch_token = tostring(os.time()) .. "-" .. string.format("%.6f", os.clock())
 
 local request_file, request_error = io.open(request_file_path, "w")
 if request_file ~= nil then
