@@ -84,15 +84,9 @@ public sealed class MainWindow : Window
             BorderThickness = new Thickness(0, 1, 0, 0),
             Padding = new Thickness(14, 7)
         };
-        var footerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        var status = BoundText("StatusText", 11, FontWeight.Medium, "#CBD5E1");
-        status.TextTrimming = TextTrimming.CharacterEllipsis;
-        footerGrid.Children.Add(status);
-
         var connection = BoundText("ConnectionText", 11, FontWeight.SemiBold, "#7DD3FC");
-        Grid.SetColumn(connection, 1);
-        footerGrid.Children.Add(connection);
-        footer.Child = footerGrid;
+        connection.HorizontalAlignment = HorizontalAlignment.Right;
+        footer.Child = connection;
         Grid.SetRow(footer, 3);
         root.Children.Add(footer);
 
@@ -149,7 +143,15 @@ public sealed class MainWindow : Window
         };
         sessionStack.Children.Add(Text("AKTIVE SESSION", 9, FontWeight.Bold, "#93C5FD"));
         sessionStack.Children.Add(Text(session?.Name ?? "SoulLocke", 13, FontWeight.Bold, "#F8FAFC"));
-        sessionStack.Children.Add(Text(session is null ? "SoulLocke" : $"ID: {session.Id}", 10, FontWeight.Normal, "#CBD5E1"));
+        var soullockeLink = Text(
+            _sessionContext is null || string.IsNullOrWhiteSpace(_sessionContext.SoullockeLink)
+                ? "SoulLocke"
+                : $"SoulLocke: {_sessionContext.SoullockeLink}",
+            10,
+            FontWeight.Normal,
+            "#CBD5E1");
+        soullockeLink.TextTrimming = TextTrimming.CharacterEllipsis;
+        sessionStack.Children.Add(soullockeLink);
         grid.Children.Add(sessionStack);
 
         var firstDivider = SectionDivider();
