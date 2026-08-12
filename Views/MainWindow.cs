@@ -134,10 +134,7 @@ public sealed class MainWindow : Window
 
     private static Button BuildLanguageButton()
     {
-        var languageMenu = new MenuFlyout
-        {
-            Placement = FlyoutPlacementMode.BottomEdgeAlignedRight
-        };
+        var languageMenu = new MenuFlyout();
 
         languageMenu.Items.Add(new MenuItem { Header = "🇩🇪  Deutsch" });
         languageMenu.Items.Add(new MenuItem { Header = "🇬🇧  English" });
