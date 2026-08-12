@@ -1,6 +1,6 @@
--- Starts the SoulBuddy desktop process when the DeSmuME collector is loaded.
--- A named mutex inside SoulBuddy prevents duplicate application instances, so this
--- script may safely try to launch it every time the Lua collector starts.
+-- Starts SoulBuddy before any collector code is initialized and blocks this Lua
+-- bootstrap until the selected SoulBuddy run has a ready JSONL event reader.
+-- A named mutex inside SoulBuddy prevents duplicate application instances.
 
 local source = debug.getinfo(1, "S").source
 if string.sub(source, 1, 1) == "@" then
@@ -40,15 +40,10 @@ if request_file ~= nil then
     request_file:flush()
     request_file:close()
 else
-    print("[SoulBuddy] Start-ID konnte nicht geschrieben werden: " .. tostring(request_error))
-    launch_token = nil
+    error("[SoulBuddy] Start-ID konnte nicht geschrieben werden: " .. tostring(request_error))
 end
 
--- Called by the callback gate installed from game_version.lua. SoulBuddy writes the
--- launch token it adopted plus a fresh timestamp. Both must match this Lua start.
-function soulbuddy_collector_ready()
-    if launch_token == nil then return false end
-
+local function soulbuddy_collector_ready()
     local file = io.open(ready_file_path, "r")
     if file == nil then
         if not ready_message_printed then
@@ -71,12 +66,20 @@ function soulbuddy_collector_ready()
     end
 
     local age = math.abs(os.time() - heartbeat)
-    local ready = age <= 5
-    if ready and ready_message_printed then
-        print("[SoulBuddy] SoulBuddy ist bereit. Collector wird jetzt freigegeben.")
-        ready_message_printed = false
+    return age <= 5
+end
+
+local function yield_while_waiting()
+    -- No SoulBuddy collector/live code has been loaded at this point. frameadvance
+    -- merely yields control back to DeSmuME so its UI remains responsive while the
+    -- user chooses a run in SoulBuddy. If unavailable, fall back to a short Windows
+    -- wait without initializing any collector state.
+    if emu ~= nil and type(emu.frameadvance) == "function" then
+        emu.frameadvance()
+        return
     end
-    return ready
+
+    os.execute('ping 127.0.0.1 -n 2 >nul')
 end
 
 local candidates = {}
@@ -103,19 +106,26 @@ for _, candidate in ipairs(candidates) do
 end
 
 if executable == nil then
-    print("[SoulBuddy] EXE nicht gefunden; Collector wartet auf eine SoulBuddy-Instanz.")
-    print("[SoulBuddy] Baue SoulBuddy zuerst oder setze SOULBUDDY_EXE auf den vollständigen EXE-Pfad.")
-    return false
+    error(
+        "[SoulBuddy] EXE nicht gefunden. Baue SoulBuddy zuerst oder setze " ..
+        "SOULBUDDY_EXE auf den vollständigen EXE-Pfad.")
 end
 
 local windows_executable = string.gsub(executable, "/", "\\")
 local command = 'cmd /C start "" /B "' .. windows_executable .. '" --from-lua'
 local ok, result = pcall(os.execute, command)
 
-if ok then
-    print("[SoulBuddy] Setup-Fenster automatisch gestartet/angefordert: " .. executable)
-    return true
+if not ok then
+    error("[SoulBuddy] Automatischer EXE-Start fehlgeschlagen: " .. tostring(result))
 end
 
-print("[SoulBuddy] Automatischer EXE-Start fehlgeschlagen: " .. tostring(result))
-return false
+print("[SoulBuddy] Setup-Fenster automatisch gestartet/angefordert: " .. executable)
+
+-- This is intentionally synchronous. Nothing after require('game_version') in the
+-- collector can initialize until the current SoulBuddy run confirms this launch token.
+while not soulbuddy_collector_ready() do
+    yield_while_waiting()
+end
+
+print("[SoulBuddy] SoulBuddy ist bereit. Collector wird jetzt initialisiert.")
+return true
