@@ -273,7 +273,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
         if (!state.InBattle)
         {
-            LiveEncounterTitle = "LIVE · AUSSERHALB DES KAMPFES";
+            LiveEncounterTitle = "Erkundet gerade die Welt";
             LiveEncounterText = $"📍 {location}";
             return;
         }
@@ -374,8 +374,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                         $"KP: {entry.CurrentHp}/{entry.MaxHp}\n" +
                         $"Fangort: {entry.Location}\n" +
                         $"Fanglevel: {entry.LevelMet}\n" +
-                        $"Soullocke: {(entry.SoullockeSynced ? "synchronisiert" : "ausstehend")}\n\n" +
-                        "Technische Daten\n" +
+                        "\n" +
+
                         $"Fangort-ID: {entry.LocationId}\n" +
                         $"PID: {entry.Pid}\n" +
                         $"Erstmals erkannt: {entry.FirstSeenAt.LocalDateTime:g}\n" +
