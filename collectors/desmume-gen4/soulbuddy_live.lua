@@ -375,7 +375,7 @@ local function read_new_overlay_messages()
         if decoded ~= nil and decoded.message ~= nil and decoded.message ~= "" then
             overlay_queue[#overlay_queue + 1] = {
                 message = tostring(decoded.message),
-                duration = tonumber(decoded.durationSeconds) or 12
+                duration = tonumber(decoded.durationSeconds) or 7
             }
         end
     end
@@ -391,6 +391,94 @@ local function activate_next_overlay_message()
 
     active_overlay_message = table.remove(overlay_queue, 1)
     active_overlay_started_at = os.time()
+end
+
+local function utf8_characters(value)
+    local characters = {}
+    local index = 1
+
+    while index <= #value do
+        local first_byte = string.byte(value, index) or 0
+        local length = 1
+        if first_byte >= 240 then
+            length = 4
+        elseif first_byte >= 224 then
+            length = 3
+        elseif first_byte >= 192 then
+            length = 2
+        end
+
+        characters[#characters + 1] = string.sub(value, index, index + length - 1)
+        index = index + length
+    end
+
+    return characters
+end
+
+local function utf8_length(value)
+    return #utf8_characters(value)
+end
+
+local function split_long_overlay_word(word, maximum_characters)
+    local characters = utf8_characters(word)
+    local chunks = {}
+    local index = 1
+
+    while index <= #characters do
+        local last_index = math.min(index + maximum_characters - 1, #characters)
+        local chunk = {}
+        for character_index = index, last_index do
+            chunk[#chunk + 1] = characters[character_index]
+        end
+        chunks[#chunks + 1] = table.concat(chunk)
+        index = last_index + 1
+    end
+
+    return chunks
+end
+
+local function wrap_overlay_text(text, maximum_characters)
+    local lines = {}
+    local current_line = ""
+
+    local function flush_current_line()
+        if current_line ~= "" then
+            lines[#lines + 1] = current_line
+            current_line = ""
+        end
+    end
+
+    for word in string.gmatch(text, "%S+") do
+        local pieces = utf8_length(word) > maximum_characters
+            and split_long_overlay_word(word, maximum_characters)
+            or { word }
+
+        for _, piece in ipairs(pieces) do
+            if current_line == "" then
+                current_line = piece
+            else
+                local candidate = current_line .. " " .. piece
+                if utf8_length(candidate) <= maximum_characters then
+                    current_line = candidate
+                else
+                    flush_current_line()
+                    current_line = piece
+                end
+            end
+
+            if utf8_length(current_line) >= maximum_characters then
+                flush_current_line()
+            end
+        end
+    end
+
+    flush_current_line()
+
+    if #lines == 0 then
+        lines[1] = ""
+    end
+
+    return lines
 end
 
 local function draw_overlay_messages()
@@ -411,14 +499,33 @@ local function draw_overlay_messages()
     end
 
     local text = active_overlay_message.message
+    local lines = wrap_overlay_text(text, 40)
 
     -- DeSmuME maps the upper DS screen to negative Y coordinates (-192..-1).
-    -- Keep the notification at the lower edge of the upper screen.
+    -- Use nearly the complete 256-pixel screen width and grow upward for every
+    -- additional wrapped line, keeping the notification at the lower screen edge.
+    local box_left = 1
+    local box_right = 254
+    local box_bottom = -4
+    local text_left = 6
+    local line_height = 10
+    local vertical_padding = 4
+    local box_height = (#lines * line_height) + (vertical_padding * 2)
+    local box_top = box_bottom - box_height
+
     if gui.box ~= nil then
-        gui.box(28, -28, 228, -6, "black", "white")
+        gui.box(box_left, box_top, box_right, box_bottom, "black", "white")
     end
 
-    gui.text(42, -20, text, "white", "black")
+    local first_text_y = box_top + vertical_padding
+    for index, line in ipairs(lines) do
+        gui.text(
+            text_left,
+            first_text_y + ((index - 1) * line_height),
+            line,
+            "white",
+            "black")
+    end
 end
 
 if gui ~= nil and gui.register ~= nil then
