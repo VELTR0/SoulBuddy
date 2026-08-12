@@ -9,12 +9,41 @@ end
 
 local directory = string.match(source, "^(.*)[/\\]") or "."
 local project_root = directory .. "/../.."
+local ready_file_path = project_root .. "/runtime/soulbuddy-ready.txt"
+local ready_message_printed = false
 
 local function file_exists(path)
     local file = io.open(path, "rb")
     if file == nil then return false end
     file:close()
     return true
+end
+
+-- Called by the callback gate installed from game_version.lua. SoulBuddy refreshes
+-- this timestamp several times per second, so a leftover file from a crashed process
+-- cannot accidentally release the collector on the next launch.
+function soulbuddy_collector_ready()
+    local file = io.open(ready_file_path, "r")
+    if file == nil then
+        if not ready_message_printed then
+            print("[SoulBuddy] Warte, bis SoulBuddy für Collector-Daten bereit ist ...")
+            ready_message_printed = true
+        end
+        return false
+    end
+
+    local heartbeat = tonumber(file:read("*l") or "")
+    file:close()
+
+    if heartbeat == nil then return false end
+
+    local age = math.abs(os.time() - heartbeat)
+    local ready = age <= 5
+    if ready and ready_message_printed then
+        print("[SoulBuddy] SoulBuddy ist bereit. Collector wird jetzt freigegeben.")
+        ready_message_printed = false
+    end
+    return ready
 end
 
 local candidates = {}
@@ -41,7 +70,7 @@ for _, candidate in ipairs(candidates) do
 end
 
 if executable == nil then
-    print("[SoulBuddy] EXE nicht gefunden; Collector startet trotzdem weiter.")
+    print("[SoulBuddy] EXE nicht gefunden; Collector wartet auf eine SoulBuddy-Instanz.")
     print("[SoulBuddy] Baue SoulBuddy zuerst oder setze SOULBUDDY_EXE auf den vollständigen EXE-Pfad.")
     return false
 end
@@ -51,7 +80,7 @@ local command = 'cmd /C start "" /B "' .. windows_executable .. '" --from-lua'
 local ok, result = pcall(os.execute, command)
 
 if ok then
-    print("[SoulBuddy] Desktop-Prozess automatisch gestartet: " .. executable)
+    print("[SoulBuddy] Desktop-Prozess automatisch gestartet/angefordert: " .. executable)
     return true
 end
 
