@@ -223,12 +223,12 @@ public sealed class JsonLineCollectorEventSource
                 break;
 
             case "party-update":
-                _ruleEventSource.ObservePokemonUpdate(collectorEvent.Slots);
+                _ruleEventSource.ObservePartyUpdate(collectorEvent.Slots);
                 await _partySource.ApplyUpdateAsync(collectorEvent.Slots, cancellationToken);
                 break;
 
             case "box-update":
-                _ruleEventSource.ObservePokemonUpdate(collectorEvent.Slots);
+                _ruleEventSource.ObserveBoxUpdate(collectorEvent.Slots);
                 await _partySource.ApplyBoxUpdateAsync(collectorEvent.Slots, cancellationToken);
                 break;
 
