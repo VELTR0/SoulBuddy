@@ -12,7 +12,9 @@ local project_root = directory .. "/../.."
 local runtime_directory = project_root .. "/runtime"
 local ready_file_path = runtime_directory .. "/soulbuddy-ready.txt"
 local request_file_path = runtime_directory .. "/soulbuddy-request.txt"
+local stop_file_path = runtime_directory .. "/soulbuddy-lua-stopped.txt"
 local ready_message_printed = false
+local stop_notified = false
 
 local directory_separator = package ~= nil and package.config ~= nil
     and string.sub(package.config, 1, 1)
@@ -26,6 +28,14 @@ local function file_exists(path)
     if file == nil then return false end
     file:close()
     return true
+end
+
+local function read_first_line(path)
+    local file = io.open(path, "r")
+    if file == nil then return nil end
+    local value = file:read("*l")
+    file:close()
+    return value
 end
 
 local function ensure_runtime_directory()
@@ -51,6 +61,38 @@ if request_file ~= nil then
     request_file:close()
 else
     error("[SoulBuddy] Start-ID konnte nicht geschrieben werden: " .. tostring(request_error))
+end
+
+-- DeSmuME calls registered exit handlers when the running Lua script is stopped.
+-- Signal only this launch token so a newly started Lua run cannot be terminated by
+-- the previous script's cleanup callback.
+local function notify_soulbuddy_lua_stopped()
+    if stop_notified then return end
+    stop_notified = true
+
+    local stop_file = io.open(stop_file_path, "w")
+    if stop_file ~= nil then
+        stop_file:write(launch_token)
+        stop_file:write("\n")
+        stop_file:write(tostring(os.time()))
+        stop_file:flush()
+        stop_file:close()
+    end
+
+    -- Remove the request only when it still belongs to this script. If another Lua
+    -- run has already written a new token, leave that newer request untouched.
+    if read_first_line(request_file_path) == launch_token then
+        pcall(os.remove, request_file_path)
+    end
+end
+
+if emu ~= nil and type(emu.registerexit) == "function" then
+    local registered = pcall(emu.registerexit, notify_soulbuddy_lua_stopped)
+    if not registered then
+        print("[SoulBuddy] Warnung: Lua-Stop-Hook konnte nicht registriert werden.")
+    end
+else
+    print("[SoulBuddy] Warnung: Diese DeSmuME-Version bietet keinen emu.registerexit-Hook.")
 end
 
 local function soulbuddy_collector_ready()
