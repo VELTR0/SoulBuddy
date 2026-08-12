@@ -5,6 +5,7 @@ public enum NuzlockeRuleEventType
     PokemonKnockedOut,
     PokemonBoxed,
     PartnerPokemonKnockedOut,
+    PartnerPokemonBoxed,
     CatchableEncounter,
     CatchSucceeded,
     CatchFailed
