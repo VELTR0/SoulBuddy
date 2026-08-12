@@ -453,10 +453,6 @@ internal sealed class LocalStreamService : IAsyncDisposable
             {
                 SetIncomingStatus("Stream liefert ungültige Videodaten · neuer Verbindungsversuch …");
             }
-            catch (UnauthorizedAccessException)
-            {
-                SetIncomingStatus("Stream empfangen · Overlay-Datei nicht beschreibbar");
-            }
             catch (Exception ex)
             {
                 SetIncomingStatus($"Streamfehler ({ex.GetType().Name}) · neuer Verbindungsversuch …");
@@ -550,13 +546,20 @@ internal sealed class LocalStreamService : IAsyncDisposable
                 ? frame
                 : ResizeGdNearest(frame, OverlayWidth, OverlayHeight);
 
-            await WriteFrameAtomicallyAsync(
-                _incomingFramePath,
-                overlayFrame,
-                cancellationToken);
-
             lastFrameAt = DateTimeOffset.UtcNow;
-            SetIncomingStatus("Stream wird im Overlay angezeigt");
+            if (await TryWriteFrameAtomicallyAsync(
+                    _incomingFramePath,
+                    overlayFrame,
+                    cancellationToken))
+            {
+                SetIncomingStatus("Stream wird im Overlay angezeigt");
+            }
+            else
+            {
+                // Lua can briefly hold the old overlay frame open while reading it.
+                // Dropping one frame is harmless; tearing down the TCP stream is not.
+                SetIncomingStatus("Stream verbunden · Overlay-Datei kurz belegt");
+            }
         }
     }
 
@@ -568,10 +571,21 @@ internal sealed class LocalStreamService : IAsyncDisposable
             if (!File.Exists(_outgoingSequencePath))
                 return null;
 
-            var text = await File.ReadAllTextAsync(
+            await using var stream = new FileStream(
                 _outgoingSequencePath,
-                cancellationToken);
-            return long.TryParse(text.Trim(), out var value)
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 64,
+                useAsync: true);
+
+            if (stream.Length <= 0 || stream.Length > 64)
+                return null;
+
+            var data = new byte[checked((int)stream.Length)];
+            await stream.ReadExactlyAsync(data, cancellationToken);
+            var text = Encoding.ASCII.GetString(data).Trim();
+            return long.TryParse(text, out var value)
                 ? value
                 : null;
         }
@@ -825,7 +839,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
         return result;
     }
 
-    private static async Task WriteFrameAtomicallyAsync(
+    private static async Task<bool> TryWriteFrameAtomicallyAsync(
         string path,
         byte[] data,
         CancellationToken cancellationToken)
@@ -835,8 +849,36 @@ internal sealed class LocalStreamService : IAsyncDisposable
             Directory.CreateDirectory(directory);
 
         var temporaryPath = path + $".tmp.{Environment.ProcessId}";
-        await File.WriteAllBytesAsync(temporaryPath, data, cancellationToken);
-        File.Move(temporaryPath, path, overwrite: true);
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                await File.WriteAllBytesAsync(
+                    temporaryPath,
+                    data,
+                    cancellationToken);
+                File.Move(temporaryPath, path, overwrite: true);
+                return true;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (IOException)
+            {
+                TryDeleteFile(temporaryPath);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                TryDeleteFile(temporaryPath);
+            }
+
+            if (attempt < 2)
+                await Task.Delay(5, cancellationToken);
+        }
+
+        TryDeleteFile(temporaryPath);
+        return false;
     }
 
     private void SetIncomingStatus(string value)
