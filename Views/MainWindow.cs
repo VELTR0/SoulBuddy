@@ -33,6 +33,7 @@ public sealed class MainWindow : Window
     private Border? _serverStatusBadge;
     private Border? _serverStatusDot;
     private TextBlock? _serverStatusText;
+    private TextBlock? _partnerActivePokemonText;
     private bool _compact;
 
     public MainWindow(SessionContext? sessionContext = null)
@@ -213,6 +214,9 @@ public sealed class MainWindow : Window
                 _serverStatusText,
                 IsServerConnected());
         }
+
+        if (eventArgs.PropertyName == nameof(MainWindowViewModel.LocalActivePokemonText))
+            UpdatePartnerActivePokemonDisplay();
     }
 
     private static Button BuildLanguageButton()
@@ -246,7 +250,6 @@ public sealed class MainWindow : Window
     private Control BuildSessionPanel()
     {
         var session = _sessionContext?.Session;
-        var local = _sessionContext?.LocalPlayer;
         var sessionLinkValue = _sessionContext?.SoullockeLink ?? string.Empty;
 
         var sessionStack = new StackPanel
@@ -319,39 +322,18 @@ public sealed class MainWindow : Window
             Child = sessionStack
         };
 
-        var playersGrid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("1*,Auto,1*")
-        };
-
-        var localStack = new StackPanel
-        {
-            Spacing = 3,
-            Margin = new Thickness(4, 2, 16, 2)
-        };
-        localStack.Children.Add(Text(
-            local is null ? "LOKALER SPIELER" : local.DisplayName.ToUpperInvariant(),
-            9,
-            FontWeight.Bold,
-            "#93C5FD"));
-        localStack.Children.Add(BoundText("LocalActivePokemonText", 10, FontWeight.Normal, "#CBD5E1"));
-        playersGrid.Children.Add(localStack);
-
-        var divider = SectionDivider();
-        Grid.SetColumn(divider, 1);
-        playersGrid.Children.Add(divider);
-
         var partnerStack = new StackPanel
         {
             Spacing = 4,
-            Margin = new Thickness(16, 2, 4, 2)
+            Margin = new Thickness(4, 2)
         };
         partnerStack.Children.Add(Text("MITTSPIELER", 9, FontWeight.Bold, "#93C5FD"));
         var partnerStatus = BoundText("PartnerStatus", 10, FontWeight.Normal, "#A7F3D0");
         partnerStatus.TextWrapping = TextWrapping.Wrap;
         partnerStack.Children.Add(partnerStatus);
-        Grid.SetColumn(partnerStack, 2);
-        playersGrid.Children.Add(partnerStack);
+        _partnerActivePokemonText = Text("Aktiv: wird ermittelt …", 10, FontWeight.Normal, "#CBD5E1");
+        _partnerActivePokemonText.TextWrapping = TextWrapping.Wrap;
+        partnerStack.Children.Add(_partnerActivePokemonText);
 
         var playersCard = new Border
         {
@@ -360,7 +342,7 @@ public sealed class MainWindow : Window
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(9),
             Padding = new Thickness(12, 10),
-            Child = playersGrid
+            Child = partnerStack
         };
 
         var cards = new Grid
@@ -374,13 +356,6 @@ public sealed class MainWindow : Window
         cards.Children.Add(playersCard);
         return cards;
     }
-
-    private static Border SectionDivider() => new()
-    {
-        Width = 1,
-        Background = Brush("#334155"),
-        VerticalAlignment = VerticalAlignment.Stretch
-    };
 
     private Control BuildPartySection()
     {
@@ -418,8 +393,6 @@ public sealed class MainWindow : Window
         liveText.TextWrapping = TextWrapping.Wrap;
         liveText.LineHeight = 18;
         livePanel.Children.Add(liveText);
-        livePanel.Children.Add(new Border { Height = 1, Background = Brush("#334155"), Margin = new Thickness(0, 4) });
-        livePanel.Children.Add(Text("Die Gegner- und Ortsdaten können je nach ROM noch unvollständig sein.", 10, FontWeight.Normal, "#94A3B8"));
 
         var detailsPanel = new StackPanel { Spacing = 8, Margin = new Thickness(2) };
         var detailsTitle = BoundText("DetailsTitle", 17, FontWeight.Bold, "#F8FAFC");
@@ -472,6 +445,35 @@ public sealed class MainWindow : Window
             Grid.SetRow(card, slot);
             _partyPanel.Children.Add(card);
         }
+
+        UpdatePartnerActivePokemonDisplay();
+    }
+
+    private void UpdatePartnerActivePokemonDisplay()
+    {
+        if (_partnerActivePokemonText is null)
+            return;
+
+        const string prefix = "Aktiv: ";
+        var activeText = _viewModel.LocalActivePokemonText;
+        if (!activeText.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            _partnerActivePokemonText.Text = "Aktiv: wird ermittelt …";
+            return;
+        }
+
+        var separatorIndex = activeText.IndexOf(" ·", prefix.Length, StringComparison.Ordinal);
+        var localActiveName = separatorIndex > prefix.Length
+            ? activeText[prefix.Length..separatorIndex]
+            : activeText[prefix.Length..];
+
+        var activeCard = _viewModel.Party.FirstOrDefault(pokemon =>
+            string.Equals(pokemon.DisplayName, localActiveName, StringComparison.Ordinal));
+        var partnerLink = activeCard?.SoullockePartnerLink;
+
+        _partnerActivePokemonText.Text = partnerLink is null
+            ? "Aktiv: nicht verknüpft"
+            : $"Aktiv: {activeCard!.LinkedNameLine}";
     }
 
     private void RenderStoredPokemon()
