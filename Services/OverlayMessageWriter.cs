@@ -68,6 +68,9 @@ public sealed class OverlayMessageWriter
             NuzlockeRuleEventType.PokemonKnockedOut =>
                 $"{name} ist K.O.!",
 
+            NuzlockeRuleEventType.PokemonBoxed =>
+                $"{name} wurde in die Box gelegt!",
+
             NuzlockeRuleEventType.PartnerPokemonKnockedOut =>
                 FormatPartnerKnockout(ruleEvent),
 
