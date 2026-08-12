@@ -186,13 +186,13 @@ public sealed class MainWindow : Window
     private bool IsEmulatorConnected() =>
         string.Equals(
             _viewModel.LocalPlayerStatus,
-            "Live-Daten werden vom Emulator empfangen",
+            "Spiel verbunden",
             StringComparison.Ordinal);
 
     private bool IsServerConnected() =>
         string.Equals(
             _viewModel.ServerSyncStatus,
-            "Live Daten werden mit Server synchronisiert",
+            "Server verbunden",
             StringComparison.Ordinal);
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
