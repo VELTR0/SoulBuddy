@@ -1,5 +1,14 @@
 -- Set the version of the game you are running in this file.
 
+-- Start the SoulBuddy desktop process whenever the DeSmuME collector is loaded.
+-- Startup failures must never prevent the emulator collector itself from running.
+local autostart_ok, autostart_error = pcall(function()
+    dofile "soulbuddy_autostart.lua"
+end)
+if not autostart_ok then
+    print("[SoulBuddy] Autostart-Script konnte nicht geladen werden: " .. tostring(autostart_error))
+end
+
 --for different game versions
 -- 1 = Ruby/Sapphire U, 2 = Emerald U, 3 = FireRed/LeafGreen U, 4 = Ruby/Sapphire J, 5 = Emerald J (TODO),
 -- 6 = FireRed/LeafGreen J (1360)
