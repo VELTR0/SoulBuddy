@@ -15,7 +15,7 @@ end
 -- dormant until SoulBuddy's JSONL reader has initialized and publishes a fresh
 -- heartbeat. This preserves first_run and prevents the initial party snapshot from
 -- being written before SoulBuddy can consume it.
-if gui ~= nil and gui.register ~= nil and not soulbuddy_ready_gate_installed then
+if gui ~= nil and gui.register ~= nil then
     local register_callback = gui.register
     gui.register = function(callback)
         if type(callback) ~= "function" then
@@ -31,7 +31,6 @@ if gui ~= nil and gui.register ~= nil and not soulbuddy_ready_gate_installed the
             return callback()
         end)
     end
-    soulbuddy_ready_gate_installed = true
 end
 
 --for different game versions
