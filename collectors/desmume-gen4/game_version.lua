@@ -1,12 +1,37 @@
 -- Set the version of the game you are running in this file.
 
 -- Start the SoulBuddy desktop process whenever the DeSmuME collector is loaded.
--- Startup failures must never prevent the emulator collector itself from running.
+-- Startup failures must never prevent the emulator collector itself from loading.
 local autostart_ok, autostart_error = pcall(function()
     dofile "soulbuddy_autostart.lua"
 end)
 if not autostart_ok then
     print("[SoulBuddy] Autostart-Script konnte nicht geladen werden: " .. tostring(autostart_error))
+end
+
+-- soulbuddy_all.lua temporarily replaces gui.register so it can combine all
+-- callbacks into one DeSmuME callback. Wrap that temporary register function here,
+-- before auto_layout and soulbuddy_live register their callbacks. The callbacks stay
+-- dormant until SoulBuddy's JSONL reader has initialized and publishes a fresh
+-- heartbeat. This preserves first_run and prevents the initial party snapshot from
+-- being written before SoulBuddy can consume it.
+if gui ~= nil and gui.register ~= nil and not soulbuddy_ready_gate_installed then
+    local register_callback = gui.register
+    gui.register = function(callback)
+        if type(callback) ~= "function" then
+            return register_callback(callback)
+        end
+
+        return register_callback(function()
+            if type(soulbuddy_collector_ready) == "function" and
+               not soulbuddy_collector_ready() then
+                return
+            end
+
+            return callback()
+        end)
+    end
+    soulbuddy_ready_gate_installed = true
 end
 
 --for different game versions
