@@ -1,36 +1,18 @@
 -- Set the version of the game you are running in this file.
 
--- Start the SoulBuddy desktop process whenever the DeSmuME collector is loaded.
--- Startup failures must never prevent the emulator collector itself from loading.
-local autostart_ok, autostart_error = pcall(function()
-    dofile "soulbuddy_autostart.lua"
+-- This is the first collector bootstrap step. Start SoulBuddy and do not allow
+-- auto_layout, party/box tracking, live-state tracking or any gui.register callback
+-- to initialize until the selected SoulBuddy run has created a ready JSONL reader.
+local autostart_ok, autostart_result = pcall(function()
+    return dofile "soulbuddy_autostart.lua"
 end)
+
 if not autostart_ok then
-    print("[SoulBuddy] Autostart-Script konnte nicht geladen werden: " .. tostring(autostart_error))
+    error("SoulBuddy konnte vor dem Collector-Start nicht gestartet werden: " .. tostring(autostart_result))
 end
 
--- soulbuddy_all.lua temporarily replaces gui.register so it can combine all
--- callbacks into one DeSmuME callback. Wrap that temporary register function here,
--- before auto_layout and soulbuddy_live register their callbacks. The callbacks stay
--- dormant until SoulBuddy's JSONL reader has initialized and publishes a fresh
--- heartbeat. This preserves first_run and prevents the initial party snapshot from
--- being written before SoulBuddy can consume it.
-if gui ~= nil and gui.register ~= nil then
-    local register_callback = gui.register
-    gui.register = function(callback)
-        if type(callback) ~= "function" then
-            return register_callback(callback)
-        end
-
-        return register_callback(function()
-            if type(soulbuddy_collector_ready) == "function" and
-               not soulbuddy_collector_ready() then
-                return
-            end
-
-            return callback()
-        end)
-    end
+if autostart_result ~= true then
+    error("SoulBuddy ist nicht bereit. Collector wird nicht initialisiert.")
 end
 
 --for different game versions
