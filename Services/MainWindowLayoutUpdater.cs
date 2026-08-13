@@ -154,10 +154,7 @@ internal static class MainWindowLayoutUpdater
             .GetVisualDescendants()
             .OfType<TextBlock>()
             .FirstOrDefault(text =>
-                string.Equals(
-                    text.Text,
-                    "Aktuelles Team",
-                    StringComparison.Ordinal));
+                LocalizationService.IsTranslationOf(text.Text, "Aktuelles Team"));
 
         if (header is null)
         {
