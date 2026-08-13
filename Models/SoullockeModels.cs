@@ -97,18 +97,11 @@ public sealed record SoullockePartnerCatchFailedDetected(
     string? Nickname,
     string Location);
 
-public sealed record SoullockePartnerBoxDetected(
-    int Pokemon,
-    string? Nickname,
-    string Location,
-    int? LinkedPokemon,
-    string? LinkedNickname);
-
 /// <summary>
 /// Observes the batch-load responses that SoulBuddy already performs. The first
 /// response for each player establishes a baseline. Later additions are surfaced as
-/// successful or failed catches; existing encounters can still expose box transitions
-/// until the legacy boxing observer is removed by the overlay migration.
+/// successful or failed catches. Partner boxing is handled exclusively by SyncService
+/// through the alive-to-boxed SoulLocke status transition.
 /// </summary>
 public static class SoullockePartnerCatchObserver
 {
@@ -118,7 +111,6 @@ public static class SoullockePartnerCatchObserver
 
     private static Action<SoullockePartnerCatchDetected>? _handler;
     private static Action<SoullockePartnerCatchFailedDetected>? _failureHandler;
-    private static Action<SoullockePartnerBoxDetected>? _boxHandler;
 
     public static void ResetAndSetHandler(Action<SoullockePartnerCatchDetected> handler)
     {
@@ -127,7 +119,6 @@ public static class SoullockePartnerCatchObserver
             Snapshots.Clear();
             _handler = handler;
             _failureHandler = null;
-            _boxHandler = null;
         }
     }
 
@@ -137,20 +128,12 @@ public static class SoullockePartnerCatchObserver
             _failureHandler = handler;
     }
 
-    public static void SetBoxHandler(Action<SoullockePartnerBoxDetected> handler)
-    {
-        lock (Sync)
-            _boxHandler = handler;
-    }
-
     public static void ObserveLoadedRuns(IReadOnlyDictionary<string, SoullockeRun> runs)
     {
         var caught = new List<SoullockePartnerCatchDetected>();
         var failed = new List<SoullockePartnerCatchFailedDetected>();
-        var boxed = new List<SoullockePartnerBoxDetected>();
         Action<SoullockePartnerCatchDetected>? handler;
         Action<SoullockePartnerCatchFailedDetected>? failureHandler;
-        Action<SoullockePartnerBoxDetected>? boxHandler;
 
         lock (Sync)
         {
@@ -167,46 +150,25 @@ public static class SoullockePartnerCatchObserver
 
                         var existedBefore = previous.TryGetValue(encounter.Key, out var oldEncounter) &&
                                            oldEncounter.Pokemon > 0;
+                        if (existedBefore)
+                            continue;
 
-                        if (!existedBefore)
+                        if (encounter.Value.Status is "alive" or "boxed")
                         {
-                            if (encounter.Value.Status is "alive" or "boxed")
-                            {
-                                caught.Add(new SoullockePartnerCatchDetected(
-                                    encounter.Value.Pokemon,
-                                    encounter.Value.Nickname,
-                                    encounter.Value.Location));
-                                continue;
-                            }
-
-                            if (encounter.Value.Status == "notcaught")
-                            {
-                                failed.Add(new SoullockePartnerCatchFailedDetected(
-                                    encounter.Value.Pokemon,
-                                    encounter.Value.Nickname,
-                                    encounter.Value.Location));
-                                continue;
-                            }
-                        }
-
-                        // A direct catch into a full box already starts as boxed and is
-                        // handled above as a catch. A boxing notification is only a
-                        // transition of the same already-known encounter into boxed.
-                        if (!existedBefore ||
-                            oldEncounter!.Pokemon != encounter.Value.Pokemon ||
-                            oldEncounter.Status == "boxed" ||
-                            encounter.Value.Status != "boxed")
-                        {
+                            caught.Add(new SoullockePartnerCatchDetected(
+                                encounter.Value.Pokemon,
+                                encounter.Value.Nickname,
+                                encounter.Value.Location));
                             continue;
                         }
 
-                        var linked = FindLinkedEncounterLocked(player.Key, encounter.Key);
-                        boxed.Add(new SoullockePartnerBoxDetected(
-                            encounter.Value.Pokemon,
-                            encounter.Value.Nickname,
-                            encounter.Value.Location,
-                            linked?.Pokemon,
-                            linked?.Nickname));
+                        if (encounter.Value.Status == "notcaught")
+                        {
+                            failed.Add(new SoullockePartnerCatchFailedDetected(
+                                encounter.Value.Pokemon,
+                                encounter.Value.Nickname,
+                                encounter.Value.Location));
+                        }
                     }
                 }
 
@@ -215,7 +177,6 @@ public static class SoullockePartnerCatchObserver
 
             handler = _handler;
             failureHandler = _failureHandler;
-            boxHandler = _boxHandler;
         }
 
         if (handler is not null)
@@ -229,31 +190,6 @@ public static class SoullockePartnerCatchObserver
             foreach (var encounter in failed)
                 failureHandler(encounter);
         }
-
-        if (boxHandler is not null)
-        {
-            foreach (var encounter in boxed)
-                boxHandler(encounter);
-        }
-    }
-
-    private static EncounterSnapshot? FindLinkedEncounterLocked(
-        string changedPlayerId,
-        string normalizedLocation)
-    {
-        foreach (var player in Snapshots)
-        {
-            if (string.Equals(player.Key, changedPlayerId, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (player.Value.TryGetValue(normalizedLocation, out var linked) &&
-                linked.Pokemon > 0)
-            {
-                return linked;
-            }
-        }
-
-        return null;
     }
 
     private static Dictionary<string, EncounterSnapshot> BuildSnapshot(SoullockeRun run)
