@@ -152,12 +152,6 @@ internal static class StreamUiInjector
                 15,
                 FontWeight.Bold,
                 "#F8FAFC"));
-            root.Children.Add(Text(
-                "Für den ersten Test läuft der Videostream direkt zwischen zwei SoulBuddy-Instanzen auf demselben PC.",
-                10,
-                FontWeight.Normal,
-                "#94A3B8",
-                wrap: true));
 
             var incomingPanel = new StackPanel { Spacing = 6 };
             incomingPanel.Children.Add(Text(
