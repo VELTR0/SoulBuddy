@@ -2,7 +2,6 @@ using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Controls.Primitives;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 
@@ -13,6 +12,33 @@ internal static class LocalizationUiInjector
     private static readonly ConditionalWeakTable<AvaloniaObject, ControlLocalizationState> States = new();
     private static readonly HashSet<MenuItem> WiredLanguageItems = [];
     private static DispatcherTimer? _timer;
+
+    private static readonly string[][] LiveExactPhrases =
+    [
+        P("Streaming", "Streaming", "Streaming", "Streaming", "Streaming", "ストリーミング"),
+        P("Du", "You", "Toi", "Tú", "Tu", "あなた"),
+        P("Partner", "Partner", "Partenaire", "Compañero", "Compagno", "パートナー"),
+        P("Stream starten", "Start stream", "Démarrer le stream", "Iniciar stream", "Avvia stream", "ストリーム開始"),
+        P("Stream stoppen", "Stop stream", "Arrêter le stream", "Detener stream", "Ferma stream", "ストリーム停止"),
+        P("Stream in DeSmuMe anzeigen", "Show stream in DeSmuMe", "Afficher le stream dans DeSmuMe", "Mostrar stream en DeSmuMe", "Mostra stream in DeSmuMe", "DeSmuMeにストリームを表示"),
+        P("Streams hier anzeigen", "Show streams here", "Afficher les streams ici", "Mostrar streams aquí", "Mostra gli stream qui", "ここにストリームを表示"),
+        P("Nicht gestartet", "Not started", "Non démarré", "No iniciado", "Non avviato", "未開始"),
+        P("Warte auf Videoframes", "Waiting for video frames", "En attente des images vidéo", "Esperando fotogramas", "In attesa dei frame video", "映像フレーム待機中"),
+        P("Warte auf Partner-Stream", "Waiting for partner stream", "En attente du stream du partenaire", "Esperando el stream del compañero", "In attesa dello stream del compagno", "パートナーのストリーム待機中"),
+        P("Kein Partnerbild", "No partner video", "Aucune image du partenaire", "Sin imagen del compañero", "Nessuna immagine del compagno", "パートナー映像なし"),
+        P("Partner-Aktivität wird geladen …", "Loading partner activity …", "Chargement de l’activité du partenaire …", "Cargando actividad del compañero …", "Caricamento attività del compagno …", "パートナーのアクティビティを読み込み中…")
+    ];
+
+    private static readonly string[][] LiveFragmentPhrases =
+    [
+        P("Trainerkampf", "Trainer battle", "Combat de Dresseur", "Combate de Entrenador", "Lotta con Allenatore", "トレーナー戦"),
+        P("Wilder Kampf", "Wild battle", "Combat sauvage", "Combate salvaje", "Lotta con Pokémon selvatico", "野生ポケモン戦"),
+        P("Kampf erkannt", "Battle detected", "Combat détecté", "Combate detectado", "Lotta rilevata", "バトルを検出"),
+        P("Aufenthaltsort wird ermittelt", "Detecting location", "Détection du lieu", "Detectando ubicación", "Rilevamento posizione", "場所を検出中"),
+        P("Erkundet gerade die Welt", "Exploring the world", "Explore le monde", "Explorando el mundo", "Esplorazione del mondo", "フィールドを探索中"),
+        P("Gegner: wird ermittelt …", "Opponent: detecting …", "Adversaire : détection …", "Rival: detectando …", "Avversario: rilevamento …", "相手: 検出中…"),
+        P(" KP", " HP", " PV", " PS", " PS", " HP")
+    ];
 
     [ModuleInitializer]
     internal static void Initialize()
@@ -111,7 +137,7 @@ internal static class LocalizationUiInjector
             return;
 
         var source = ResolveSource(owner, propertyKey, current);
-        var translated = LocalizationService.Ui(source);
+        var translated = TranslateUi(source);
         var state = GetState(owner, propertyKey);
         state.LastApplied = translated;
         if (!string.Equals(current, translated, StringComparison.Ordinal))
@@ -124,7 +150,7 @@ internal static class LocalizationUiInjector
             return;
 
         var source = ResolveSource(owner, propertyKey, current);
-        var translated = LocalizationService.Ui(source);
+        var translated = TranslateUi(source);
         var state = GetState(owner, propertyKey);
         state.LastApplied = translated;
         if (!string.Equals(current, translated, StringComparison.Ordinal))
@@ -133,16 +159,54 @@ internal static class LocalizationUiInjector
 
     private static void ApplyHeader(HeaderedContentControl owner, string current, string propertyKey)
     {
-        if (string.IsNullOrEmpty(current) || IsLanguageMenuHeader(current) || ShouldWaitForStreamInjection(owner, current))
+        if (string.IsNullOrEmpty(current) || IsLanguageMenuHeader(current))
             return;
 
         var source = ResolveSource(owner, propertyKey, current);
-        var translated = LocalizationService.Ui(source);
+        var translated = TranslateUi(source);
         var state = GetState(owner, propertyKey);
         state.LastApplied = translated;
         if (!string.Equals(current, translated, StringComparison.Ordinal))
             owner.SetCurrentValue(HeaderedContentControl.HeaderProperty, translated);
     }
+
+    private static string TranslateUi(string source)
+    {
+        var translated = LocalizationService.Ui(source);
+        if (LocalizationService.CurrentLanguage == AppLanguage.German)
+            return translated;
+
+        var exact = LiveExactPhrases.FirstOrDefault(phrase =>
+            phrase.Any(value => string.Equals(value, translated, StringComparison.Ordinal)) ||
+            string.Equals(phrase[0], source, StringComparison.Ordinal));
+        if (exact is not null)
+            translated = GetLiveTranslation(exact);
+
+        foreach (var phrase in LiveFragmentPhrases.OrderByDescending(item => item[0].Length))
+        {
+            if (translated.Contains(phrase[0], StringComparison.Ordinal))
+                translated = translated.Replace(
+                    phrase[0],
+                    GetLiveTranslation(phrase),
+                    StringComparison.Ordinal);
+        }
+
+        return translated;
+    }
+
+    private static string GetLiveTranslation(string[] translations) =>
+        translations[LocalizationService.CurrentLanguage switch
+        {
+            AppLanguage.English => 1,
+            AppLanguage.French => 2,
+            AppLanguage.Spanish => 3,
+            AppLanguage.Italian => 4,
+            AppLanguage.Japanese => 5,
+            _ => 0
+        }];
+
+    private static string[] P(string de, string en, string fr, string es, string it, string ja) =>
+        [de, en, fr, es, it, ja];
 
     private static bool IsPendingSessionCopyButton(ContentControl owner, string current)
     {
@@ -152,21 +216,6 @@ internal static class LocalizationUiInjector
         return owner.Parent is Grid grid && grid.Children
             .OfType<TextBlock>()
             .Any(text => string.Equals(text.Text, "Session Link:", StringComparison.Ordinal));
-    }
-
-    private static bool ShouldWaitForStreamInjection(HeaderedContentControl owner, string current)
-    {
-        if (current is not "Live" and not "Details")
-            return false;
-
-        var window = TopLevel.GetTopLevel(owner) as Window;
-        if (window is null)
-            return false;
-
-        return !window.GetVisualDescendants()
-            .OfType<TabControl>()
-            .SelectMany(tab => tab.Items.OfType<TabItem>())
-            .Any(item => LocalizationService.IsTranslationOf(item.Header?.ToString(), "Stream"));
     }
 
     private static string ResolveSource(AvaloniaObject owner, string propertyKey, string current)
