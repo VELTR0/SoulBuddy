@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -88,15 +87,11 @@ internal static class LocalizationUiInjector
     {
         foreach (var visual in window.GetVisualDescendants())
         {
-            switch (visual)
-            {
-                case TextBlock textBlock:
-                    ApplyText(textBlock, TextBlock.TextProperty, textBlock.Text, "text");
-                    break;
-                case TextBox textBox:
-                    ApplyText(textBox, TextBox.PlaceholderTextProperty, textBox.PlaceholderText, "placeholder");
-                    break;
-            }
+            if (visual is TextBlock textBlock)
+                ApplyText(textBlock, TextBlock.TextProperty, textBlock.Text, "text");
+
+            if (visual is TextBox textBox)
+                ApplyText(textBox, TextBox.PlaceholderTextProperty, textBox.PlaceholderText, "placeholder");
 
             if (visual is ContentControl contentControl && contentControl.Content is string content)
                 ApplyContent(contentControl, content, "content");
@@ -138,7 +133,7 @@ internal static class LocalizationUiInjector
 
     private static void ApplyHeader(HeaderedContentControl owner, string current, string propertyKey)
     {
-        if (string.IsNullOrEmpty(current) || current.Contains('🇩') || current.Contains('🇬') || current.Contains('🇫') || current.Contains('🇪') || current.Contains('🇮') || current.Contains('🇯'))
+        if (string.IsNullOrEmpty(current) || IsLanguageMenuHeader(current))
             return;
 
         var source = ResolveSource(owner, propertyKey, current);
@@ -161,8 +156,6 @@ internal static class LocalizationUiInjector
         if (state.LastApplied is not null && string.Equals(current, state.LastApplied, StringComparison.Ordinal))
             return state.Source;
 
-        // A binding or the application itself supplied a new value. Treat that as
-        // the new canonical source and translate it without replacing the binding.
         state.Source = current;
         return current;
     }
@@ -180,6 +173,14 @@ internal static class LocalizationUiInjector
 
     private static bool IsLanguageFlag(string value) =>
         value is "🇩🇪" or "🇬🇧" or "🇫🇷" or "🇪🇸" or "🇮🇹" or "🇯🇵";
+
+    private static bool IsLanguageMenuHeader(string value) =>
+        value.Contains("🇩🇪", StringComparison.Ordinal) ||
+        value.Contains("🇬🇧", StringComparison.Ordinal) ||
+        value.Contains("🇫🇷", StringComparison.Ordinal) ||
+        value.Contains("🇪🇸", StringComparison.Ordinal) ||
+        value.Contains("🇮🇹", StringComparison.Ordinal) ||
+        value.Contains("🇯🇵", StringComparison.Ordinal);
 
     private sealed class ControlLocalizationState
     {
