@@ -50,7 +50,7 @@ internal static class StreamUiInjector
             if (tabControl is null)
                 continue;
 
-            var state = new StreamWindowState(window, tabControl);
+            var state = new StreamWindowState(tabControl);
             WindowStates[window] = state;
             window.Closed += (_, _) => Detach(window);
         }
@@ -83,13 +83,11 @@ internal static class StreamUiInjector
 
     private sealed class StreamWindowState : IAsyncDisposable
     {
-        private const int PreviewWidth = 64;
-        private const int PreviewHeight = 48;
+        private const int PreviewWidth = 256;
+        private const int PreviewHeight = 192;
 
         private readonly LocalStreamService _streamService = new();
         private readonly LanStreamDiscoveryService _lanDiscovery = new();
-        private readonly StreamPreviewClient _ownPreviewClient = new();
-        private readonly StreamPreviewClient _partnerPreviewClient = new();
         private readonly WriteableBitmap _ownPreviewBitmap = CreatePreviewBitmap();
         private readonly WriteableBitmap _partnerPreviewBitmap = CreatePreviewBitmap();
         private readonly Image _ownPreviewImage;
@@ -99,7 +97,8 @@ internal static class StreamUiInjector
         private readonly TextBlock _ownStatusText;
         private readonly TextBlock _partnerStatusText;
         private readonly Button _startButton;
-        private readonly CheckBox _showStreamsCheckBox;
+        private readonly CheckBox _showOverlayCheckBox;
+        private readonly CheckBox _showGuiStreamsCheckBox;
         private readonly Control _previewContainer;
         private readonly string _renderHiddenPath;
 
@@ -110,7 +109,7 @@ internal static class StreamUiInjector
         private bool _partnerConnected;
         private bool _disposed;
 
-        public StreamWindowState(Window window, TabControl tabs)
+        public StreamWindowState(TabControl tabs)
         {
             _renderHiddenPath = LuaLaunchContext.ScopePath(
                 Path.Combine(FindRuntimeDirectory(), "stream-render.hidden"));
@@ -141,17 +140,15 @@ internal static class StreamUiInjector
             _startButton.HorizontalAlignment = HorizontalAlignment.Left;
             _startButton.Click += OnStartButtonClick;
 
-            _showStreamsCheckBox = new CheckBox
-            {
-                Content = "Stream-Vorschauen und DeSmuME-Overlay anzeigen",
-                IsChecked = true,
-                FontSize = 10,
-                Foreground = Brush("#CBD5E1")
-            };
-            _showStreamsCheckBox.Click += OnShowStreamsClick;
+            _showOverlayCheckBox = CreateVisibilityCheckBox(
+                "Stream im DeSmuME-Overlay anzeigen");
+            _showGuiStreamsCheckBox = CreateVisibilityCheckBox(
+                "Streams in SoulBuddy anzeigen");
+            _showOverlayCheckBox.Click += OnOverlayVisibilityClick;
+            _showGuiStreamsCheckBox.Click += OnGuiVisibilityClick;
 
-            _ownPreviewClient.FrameChanged += OnOwnPreviewFrameChanged;
-            _partnerPreviewClient.FrameChanged += OnPartnerPreviewFrameChanged;
+            _streamService.OutgoingFrameChanged += OnOwnFrameChanged;
+            _streamService.IncomingFrameChanged += OnPartnerFrameChanged;
             _streamService.StatusChanged += OnStreamStatusChanged;
 
             _previewContainer = BuildPreviewContainer();
@@ -183,22 +180,19 @@ internal static class StreamUiInjector
                 "#F8FAFC"));
 
             root.Children.Add(Text(
-                "Startet deinen Stream und sucht anschließend automatisch im lokalen Netzwerk nach einem laufenden Partner-Stream.",
+                "Startet deinen Stream in nativer DS-Auflösung und sucht anschließend automatisch im lokalen Netzwerk nach einem Partner-Stream.",
                 9,
                 FontWeight.Normal,
                 "#94A3B8",
                 wrap: true));
 
-            var controls = new StackPanel
-            {
-                Spacing = 9
-            };
+            var controls = new StackPanel { Spacing = 9 };
             controls.Children.Add(_startButton);
-            controls.Children.Add(_showStreamsCheckBox);
+            controls.Children.Add(_showOverlayCheckBox);
+            controls.Children.Add(_showGuiStreamsCheckBox);
             root.Children.Add(Card(controls));
 
             root.Children.Add(_previewContainer);
-
             return root;
         }
 
@@ -233,10 +227,7 @@ internal static class StreamUiInjector
             TextBlock placeholder,
             TextBlock status)
         {
-            var panel = new StackPanel
-            {
-                Spacing = 7
-            };
+            var panel = new StackPanel { Spacing = 7 };
             panel.Children.Add(Text(
                 title,
                 10,
@@ -245,14 +236,13 @@ internal static class StreamUiInjector
 
             var viewport = new Grid
             {
-                Height = 112,
+                Height = 132,
                 Background = Brush("#09101D")
             };
             viewport.Children.Add(image);
             viewport.Children.Add(placeholder);
             panel.Children.Add(viewport);
             panel.Children.Add(status);
-
             return Card(panel);
         }
 
@@ -269,13 +259,9 @@ internal static class StreamUiInjector
             try
             {
                 if (_streamService.IsOutgoingRunning)
-                {
                     await StopStreamingSessionAsync();
-                }
                 else
-                {
                     await StartStreamingSessionAsync();
-                }
             }
             catch (Exception ex)
             {
@@ -296,13 +282,11 @@ internal static class StreamUiInjector
 
             try
             {
-                await _ownPreviewClient.ConnectAsync(localUrl);
                 await _lanDiscovery.StartAdvertisingAsync(localUrl);
                 StartPartnerDiscoveryLoop();
             }
             catch
             {
-                await _ownPreviewClient.DisconnectAsync();
                 await _lanDiscovery.StopAdvertisingAsync();
                 await _streamService.StopOutgoingAsync();
                 throw;
@@ -315,10 +299,8 @@ internal static class StreamUiInjector
             _partnerSearching = false;
             _partnerConnected = false;
 
-            await _partnerPreviewClient.DisconnectAsync();
             await _streamService.SetIncomingUrlAsync(null);
             await _lanDiscovery.StopAdvertisingAsync();
-            await _ownPreviewClient.DisconnectAsync();
             await _streamService.StopOutgoingAsync();
 
             _partnerPreviewPlaceholder.Text = "Warte auf Partner-Stream";
@@ -348,8 +330,6 @@ internal static class StreamUiInjector
                     if (!string.IsNullOrWhiteSpace(url))
                     {
                         await _streamService.SetIncomingUrlAsync(url);
-                        await _partnerPreviewClient.ConnectAsync(url);
-
                         _partnerSearching = false;
                         _partnerConnected = true;
                         Dispatcher.UIThread.Post(RefreshUi);
@@ -362,8 +342,7 @@ internal static class StreamUiInjector
                 }
                 catch
                 {
-                    // Discovery is best-effort. Keep searching until the user stops
-                    // the streaming session or another SoulBuddy stream is found.
+                    // Discovery is best-effort. Keep searching until a partner is found.
                 }
 
                 try
@@ -402,41 +381,45 @@ internal static class StreamUiInjector
             cancellation.Dispose();
         }
 
-        private void OnShowStreamsClick(
+        private void OnOverlayVisibilityClick(
             object? sender,
             Avalonia.Interactivity.RoutedEventArgs eventArgs)
         {
-            ApplyStreamVisibility();
+            ApplyOverlayVisibility();
         }
 
-        private void ApplyStreamVisibility()
+        private void OnGuiVisibilityClick(
+            object? sender,
+            Avalonia.Interactivity.RoutedEventArgs eventArgs)
         {
-            var visible = _showStreamsCheckBox.IsChecked != false;
-            _previewContainer.IsVisible = visible;
+            _previewContainer.IsVisible = _showGuiStreamsCheckBox.IsChecked != false;
+        }
 
+        private void ApplyOverlayVisibility()
+        {
+            var visible = _showOverlayCheckBox.IsChecked != false;
             if (visible)
             {
                 TryDeleteFile(_renderHiddenPath);
+                return;
             }
-            else
+
+            try
             {
-                try
-                {
-                    var directory = Path.GetDirectoryName(_renderHiddenPath);
-                    if (!string.IsNullOrWhiteSpace(directory))
-                        Directory.CreateDirectory(directory);
-                    File.WriteAllText(_renderHiddenPath, "1");
-                }
-                catch (IOException)
-                {
-                }
-                catch (UnauthorizedAccessException)
-                {
-                }
+                var directory = Path.GetDirectoryName(_renderHiddenPath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                    Directory.CreateDirectory(directory);
+                File.WriteAllText(_renderHiddenPath, "1");
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
             }
         }
 
-        private void OnOwnPreviewFrameChanged(byte[]? frame)
+        private void OnOwnFrameChanged(byte[]? frame)
         {
             Dispatcher.UIThread.Post(() =>
                 ApplyPreviewFrame(
@@ -449,7 +432,7 @@ internal static class StreamUiInjector
                         : "Nicht gestartet"));
         }
 
-        private void OnPartnerPreviewFrameChanged(byte[]? frame)
+        private void OnPartnerFrameChanged(byte[]? frame)
         {
             Dispatcher.UIThread.Post(() =>
                 ApplyPreviewFrame(
@@ -494,9 +477,7 @@ internal static class StreamUiInjector
 
             _ownStatusText.Text = _streamService.OutgoingStatus;
             _ownStatusText.Foreground = Brush(
-                _streamService.IsOutgoingRunning
-                    ? "#A7F3D0"
-                    : "#94A3B8");
+                _streamService.IsOutgoingRunning ? "#A7F3D0" : "#94A3B8");
 
             if (_partnerSearching)
             {
@@ -507,7 +488,7 @@ internal static class StreamUiInjector
             {
                 _partnerStatusText.Text = _streamService.IncomingStatus;
                 _partnerStatusText.Foreground = Brush(
-                    _streamService.IncomingStatus.Contains("angezeigt", StringComparison.OrdinalIgnoreCase)
+                    _streamService.IncomingStatus.Contains("verbunden", StringComparison.OrdinalIgnoreCase)
                         ? "#A7F3D0"
                         : "#94A3B8");
             }
@@ -527,14 +508,13 @@ internal static class StreamUiInjector
 
             _disposed = true;
             _startButton.Click -= OnStartButtonClick;
-            _showStreamsCheckBox.Click -= OnShowStreamsClick;
-            _ownPreviewClient.FrameChanged -= OnOwnPreviewFrameChanged;
-            _partnerPreviewClient.FrameChanged -= OnPartnerPreviewFrameChanged;
+            _showOverlayCheckBox.Click -= OnOverlayVisibilityClick;
+            _showGuiStreamsCheckBox.Click -= OnGuiVisibilityClick;
+            _streamService.OutgoingFrameChanged -= OnOwnFrameChanged;
+            _streamService.IncomingFrameChanged -= OnPartnerFrameChanged;
             _streamService.StatusChanged -= OnStreamStatusChanged;
 
             await StopPartnerDiscoveryLoopAsync();
-            await _partnerPreviewClient.DisposeAsync();
-            await _ownPreviewClient.DisposeAsync();
             await _lanDiscovery.DisposeAsync();
             await _streamService.DisposeAsync();
 
@@ -555,6 +535,14 @@ internal static class StreamUiInjector
             Stretch = Stretch.Uniform,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch
+        };
+
+        private static CheckBox CreateVisibilityCheckBox(string label) => new()
+        {
+            Content = label,
+            IsChecked = true,
+            FontSize = 10,
+            Foreground = Brush("#CBD5E1")
         };
 
         private static TextBlock PreviewPlaceholder(string text) => new()
@@ -604,8 +592,7 @@ internal static class StreamUiInjector
                     var sourceOffset = 11 + ((sourceY * sourceWidth + sourceX) * 4);
                     var targetOffset = x * 4;
 
-                    // GD truecolor pixels are stored as a big-endian ARGB dword.
-                    // The DS screen itself is opaque, so the preview uses full alpha.
+                    // DeSmuME's GD truecolor pixels are big-endian ARGB.
                     row[targetOffset] = data[sourceOffset + 3];
                     row[targetOffset + 1] = data[sourceOffset + 2];
                     row[targetOffset + 2] = data[sourceOffset + 1];
