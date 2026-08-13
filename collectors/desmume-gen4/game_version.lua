@@ -1,18 +1,27 @@
 -- Set the version of the game you are running in this file.
 
--- Start the companion app before collector code is initialized. Do not allow
--- party/box/live tracking or gui.register callbacks to initialize until the
--- selected run has created a ready JSONL reader.
+-- This is the first collector bootstrap step. Start SoulBuddy and do not allow
+-- auto_layout, party/box tracking, live-state tracking or any gui.register callback
+-- to initialize until the selected SoulBuddy run has created a ready JSONL reader.
 local autostart_ok, autostart_result = pcall(function()
     return dofile "bootstrap.lua"
 end)
 
 if not autostart_ok then
-    error("Companion konnte vor dem Collector-Start nicht gestartet werden: " .. tostring(autostart_result))
+    error("SoulBuddy konnte vor dem Collector-Start nicht gestartet werden: " .. tostring(autostart_result))
 end
 
 if autostart_result ~= true then
-    error("Companion ist nicht bereit. Collector wird nicht initialisiert.")
+    error("SoulBuddy ist nicht bereit. Collector wird nicht initialisiert.")
+end
+
+-- Smooth the tiny no-file window that can occur while the receiver atomically
+-- replaces an incoming video frame. Failure is non-fatal; streaming can still run.
+local guard_ok, guard_result = pcall(function()
+    return dofile "stream_file_guard.lua"
+end)
+if not guard_ok then
+    print("[Stream] Frame-Datei-Guard konnte nicht geladen werden: " .. tostring(guard_result))
 end
 
 -- Video is optional. A failure here must never prevent the normal collector,
