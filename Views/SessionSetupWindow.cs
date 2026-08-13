@@ -72,7 +72,21 @@ public sealed class SessionSetupWindow : Window
             Margin = new Thickness(34)
         };
 
-        content.Children.Add(Text("SoulBuddy", 36, FontWeight.Bold, "#F8FAFC"));
+        var header = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            ColumnSpacing = 12
+        };
+        var title = Text("SoulBuddy", 36, FontWeight.Bold, "#F8FAFC");
+        title.VerticalAlignment = VerticalAlignment.Center;
+        header.Children.Add(title);
+
+        var languageButton = BuildLanguageButton();
+        languageButton.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(languageButton, 1);
+        header.Children.Add(languageButton);
+        content.Children.Add(header);
+
         content.Children.Add(Text(
             "Wähle bei jedem Start den gewünschten SoulLocke-Run oder gib eine neue SoulLocke-Session ein.",
             15,
@@ -236,6 +250,33 @@ public sealed class SessionSetupWindow : Window
     {
         _statusText.Text = message;
         _statusText.Foreground = Brush(isError ? "#FCA5A5" : "#A7F3D0");
+    }
+
+    private static Button BuildLanguageButton()
+    {
+        var languageMenu = new MenuFlyout();
+        languageMenu.Items.Add(new MenuItem { Header = "🇬🇧  English" });
+        languageMenu.Items.Add(new MenuItem { Header = "🇩🇪  Deutsch" });
+        languageMenu.Items.Add(new MenuItem { Header = "🇫🇷  Français" });
+        languageMenu.Items.Add(new MenuItem { Header = "🇪🇸  Español" });
+        languageMenu.Items.Add(new MenuItem { Header = "🇮🇹  Italiano" });
+        languageMenu.Items.Add(new MenuItem { Header = "🇯🇵  日本語" });
+
+        return new Button
+        {
+            Content = LocalizationService.CurrentFlag,
+            Flyout = languageMenu,
+            Width = 44,
+            Height = 34,
+            Padding = new Thickness(6, 2),
+            FontSize = 18,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Background = Brush("#17243A"),
+            BorderBrush = Brush("#344763"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(9)
+        };
     }
 
     private static TextBox CreateTextBox(string placeholderText) => new()
