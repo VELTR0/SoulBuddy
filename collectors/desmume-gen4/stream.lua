@@ -34,6 +34,8 @@ local capture_enabled_path = scoped_runtime_path("stream-capture.enabled")
 local outgoing_frame_path = scoped_runtime_path("stream-out.gd")
 local outgoing_sequence_path = scoped_runtime_path("stream-out.seq")
 local incoming_frame_path = scoped_runtime_path("stream-in.gd")
+local incoming_sequence_path = scoped_runtime_path("stream-in.seq")
+local incoming_alive_path = scoped_runtime_path("stream-in.alive")
 local render_hidden_path = scoped_runtime_path("stream-render.hidden")
 
 local capture_frame_interval = 6
@@ -41,6 +43,7 @@ local incoming_read_frame_interval = 2
 local last_capture_frame = -1000
 local last_incoming_read_frame = -1000
 local incoming_frame_cache = nil
+local last_incoming_sequence = nil
 local capture_warning_printed = false
 local overlay_warning_printed = false
 local capture_failure_count = 0
@@ -59,6 +62,16 @@ local function read_binary_file(path)
     local data = file:read("*a")
     file:close()
     return data
+end
+
+local function read_sequence(path)
+    local data = read_binary_file(path)
+    if data == nil then
+        return nil
+    end
+
+    local value = tonumber(string.match(data, "%d+"))
+    return value
 end
 
 local function valid_gd_frame(data)
@@ -181,11 +194,25 @@ local function refresh_incoming_frame(frame)
     end
     last_incoming_read_frame = frame
 
+    -- SoulBuddy keeps this marker alive for exactly three seconds after the last
+    -- real partner frame. Until it disappears, always retain the last valid image.
+    -- This prevents atomic file replacement or short reconnect gaps from blanking
+    -- the DeSmuME overlay for one or more rendered frames.
+    if not file_exists(incoming_alive_path) then
+        incoming_frame_cache = nil
+        last_incoming_sequence = nil
+        return
+    end
+
+    local sequence = read_sequence(incoming_sequence_path)
+    if sequence == nil or sequence == last_incoming_sequence then
+        return
+    end
+
     local data = read_binary_file(incoming_frame_path)
     if valid_gd_frame(data) then
         incoming_frame_cache = data
-    elseif data == nil then
-        incoming_frame_cache = nil
+        last_incoming_sequence = sequence
     end
 end
 
@@ -225,5 +252,5 @@ else
     return false
 end
 
-print("[Stream] Video-Bridge bereit (10 FPS, nativer 256x192-Stream, 64x48 Overlay).")
+print("[Stream] Video-Bridge bereit (10 FPS, nativer 256x192-Stream, 64x48 Overlay, 3 s Frame-Hold).")
 return true
