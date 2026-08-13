@@ -34,6 +34,7 @@ local capture_enabled_path = scoped_runtime_path("stream-capture.enabled")
 local outgoing_frame_path = scoped_runtime_path("stream-out.gd")
 local outgoing_sequence_path = scoped_runtime_path("stream-out.seq")
 local incoming_frame_path = scoped_runtime_path("stream-in.gd")
+local render_hidden_path = scoped_runtime_path("stream-render.hidden")
 
 -- A full top-screen GD string is about 192 KiB. Ten captures per second keeps the
 -- local preview responsive without putting excessive pressure on DeSmuME's Lua VM.
@@ -199,6 +200,10 @@ local function refresh_incoming_frame(frame)
 end
 
 local function draw_incoming_frame()
+    if file_exists(render_hidden_path) then
+        return
+    end
+
     if incoming_frame_cache == nil then
         return
     end
