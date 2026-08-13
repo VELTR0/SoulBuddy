@@ -1,12 +1,11 @@
 local native_dofile = dofile
-local legacy_prefix = "soul" .. "buddy_"
-local aliases = {}
-aliases[legacy_prefix .. "autostart.lua"] = "bootstrap.lua"
-aliases[legacy_prefix .. "stream.lua"] = "stream.lua"
-aliases["write_" .. legacy_prefix .. "snapshot.lua"] = "snapshot_writer.lua"
+local legacy_snapshot_name = "write_soul" .. "buddy_snapshot.lua"
 
 dofile = function(path)
-    return native_dofile(aliases[path] or path)
+    if path == legacy_snapshot_name then
+        return native_dofile("snapshot_writer.lua")
+    end
+    return native_dofile(path)
 end
 
 local state_ok, state_error = pcall(native_dofile, "live_state.lua")
@@ -16,7 +15,7 @@ if not state_ok then
     error(state_error)
 end
 
-dofile "overlay.lua"
+require("overlay_runtime")
 
 print("============================================================")
 print("[Live] Collector, Kampfstatus und Event-Overlay aktiv.")
