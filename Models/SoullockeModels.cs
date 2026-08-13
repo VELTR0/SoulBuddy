@@ -92,6 +92,11 @@ public sealed record SoullockePartnerCatchDetected(
     string? Nickname,
     string Location);
 
+public sealed record SoullockePartnerCatchFailedDetected(
+    int Pokemon,
+    string? Nickname,
+    string Location);
+
 public sealed record SoullockePartnerBoxDetected(
     int Pokemon,
     string? Nickname,
@@ -101,9 +106,9 @@ public sealed record SoullockePartnerBoxDetected(
 
 /// <summary>
 /// Observes the batch-load responses that SoulBuddy already performs. The first
-/// response for each player establishes a baseline. Later additions with a caught
-/// state and later transitions of existing encounters into the box are surfaced
-/// without requiring another poll.
+/// response for each player establishes a baseline. Later additions are surfaced as
+/// successful or failed catches; existing encounters can still expose box transitions
+/// until the legacy boxing observer is removed by the overlay migration.
 /// </summary>
 public static class SoullockePartnerCatchObserver
 {
@@ -112,6 +117,7 @@ public static class SoullockePartnerCatchObserver
         new(StringComparer.OrdinalIgnoreCase);
 
     private static Action<SoullockePartnerCatchDetected>? _handler;
+    private static Action<SoullockePartnerCatchFailedDetected>? _failureHandler;
     private static Action<SoullockePartnerBoxDetected>? _boxHandler;
 
     public static void ResetAndSetHandler(Action<SoullockePartnerCatchDetected> handler)
@@ -120,8 +126,15 @@ public static class SoullockePartnerCatchObserver
         {
             Snapshots.Clear();
             _handler = handler;
+            _failureHandler = null;
             _boxHandler = null;
         }
+    }
+
+    public static void SetFailureHandler(Action<SoullockePartnerCatchFailedDetected> handler)
+    {
+        lock (Sync)
+            _failureHandler = handler;
     }
 
     public static void SetBoxHandler(Action<SoullockePartnerBoxDetected> handler)
@@ -133,8 +146,10 @@ public static class SoullockePartnerCatchObserver
     public static void ObserveLoadedRuns(IReadOnlyDictionary<string, SoullockeRun> runs)
     {
         var caught = new List<SoullockePartnerCatchDetected>();
+        var failed = new List<SoullockePartnerCatchFailedDetected>();
         var boxed = new List<SoullockePartnerBoxDetected>();
         Action<SoullockePartnerCatchDetected>? handler;
+        Action<SoullockePartnerCatchFailedDetected>? failureHandler;
         Action<SoullockePartnerBoxDetected>? boxHandler;
 
         lock (Sync)
@@ -153,14 +168,25 @@ public static class SoullockePartnerCatchObserver
                         var existedBefore = previous.TryGetValue(encounter.Key, out var oldEncounter) &&
                                            oldEncounter.Pokemon > 0;
 
-                        if (!existedBefore &&
-                            encounter.Value.Status is "alive" or "boxed")
+                        if (!existedBefore)
                         {
-                            caught.Add(new SoullockePartnerCatchDetected(
-                                encounter.Value.Pokemon,
-                                encounter.Value.Nickname,
-                                encounter.Value.Location));
-                            continue;
+                            if (encounter.Value.Status is "alive" or "boxed")
+                            {
+                                caught.Add(new SoullockePartnerCatchDetected(
+                                    encounter.Value.Pokemon,
+                                    encounter.Value.Nickname,
+                                    encounter.Value.Location));
+                                continue;
+                            }
+
+                            if (encounter.Value.Status == "notcaught")
+                            {
+                                failed.Add(new SoullockePartnerCatchFailedDetected(
+                                    encounter.Value.Pokemon,
+                                    encounter.Value.Nickname,
+                                    encounter.Value.Location));
+                                continue;
+                            }
                         }
 
                         // A direct catch into a full box already starts as boxed and is
@@ -188,6 +214,7 @@ public static class SoullockePartnerCatchObserver
             }
 
             handler = _handler;
+            failureHandler = _failureHandler;
             boxHandler = _boxHandler;
         }
 
@@ -195,6 +222,12 @@ public static class SoullockePartnerCatchObserver
         {
             foreach (var encounter in caught)
                 handler(encounter);
+        }
+
+        if (failureHandler is not null)
+        {
+            foreach (var encounter in failed)
+                failureHandler(encounter);
         }
 
         if (boxHandler is not null)
