@@ -1,27 +1,27 @@
 -- Set the version of the game you are running in this file.
 
--- This is the first collector bootstrap step. Start SoulBuddy and do not allow
--- auto_layout, party/box tracking, live-state tracking or any gui.register callback
--- to initialize until the selected SoulBuddy run has created a ready JSONL reader.
+-- Start the companion app before collector code is initialized. Do not allow
+-- party/box/live tracking or gui.register callbacks to initialize until the
+-- selected run has created a ready JSONL reader.
 local autostart_ok, autostart_result = pcall(function()
-    return dofile "soulbuddy_autostart.lua"
+    return dofile "bootstrap.lua"
 end)
 
 if not autostart_ok then
-    error("SoulBuddy konnte vor dem Collector-Start nicht gestartet werden: " .. tostring(autostart_result))
+    error("Companion konnte vor dem Collector-Start nicht gestartet werden: " .. tostring(autostart_result))
 end
 
 if autostart_result ~= true then
-    error("SoulBuddy ist nicht bereit. Collector wird nicht initialisiert.")
+    error("Companion ist nicht bereit. Collector wird nicht initialisiert.")
 end
 
 -- Video is optional. A failure here must never prevent the normal collector,
 -- SoulLink sync or rule-event overlay from starting.
 local stream_ok, stream_result = pcall(function()
-    return dofile "soulbuddy_stream.lua"
+    return dofile "stream.lua"
 end)
 if not stream_ok then
-    print("[SoulBuddy Stream] Video-Bridge konnte nicht geladen werden: " .. tostring(stream_result))
+    print("[Stream] Video-Bridge konnte nicht geladen werden: " .. tostring(stream_result))
 end
 
 --for different game versions
