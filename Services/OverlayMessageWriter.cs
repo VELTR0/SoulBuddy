@@ -109,6 +109,9 @@ public sealed class OverlayMessageWriter
     private string FormatMessage(NuzlockeRuleEvent ruleEvent)
     {
         var name = ShortPokemonName(ruleEvent.SpeciesName, ruleEvent.Nickname);
+        var location = string.IsNullOrWhiteSpace(ruleEvent.LocationName)
+            ? "Unbekannter Ort"
+            : ruleEvent.LocationName.Trim();
 
         return ruleEvent.Type switch
         {
@@ -122,16 +125,16 @@ public sealed class OverlayMessageWriter
                 FormatPartnerBoxed(ruleEvent),
 
             NuzlockeRuleEventType.CatchableEncounter when ruleEvent.IsShiny =>
-                $"Shiny {name} fangbar!",
+                $"Shiny {name} fangbar! ({location})",
 
             NuzlockeRuleEventType.CatchableEncounter =>
-                $"{name} fangbar!",
+                $"{name} fangbar! ({location})",
 
             NuzlockeRuleEventType.CatchSucceeded =>
-                $"{name} gefangen!",
+                $"{name} gefangen! ({location})",
 
             NuzlockeRuleEventType.CatchFailed =>
-                "Fang fehlgeschlagen!",
+                $"Fang fehlgeschlagen! ({location})",
 
             _ => $"{name}: Nuzlocke-Event"
         };
