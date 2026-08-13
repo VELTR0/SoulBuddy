@@ -1,15 +1,16 @@
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using SoulBuddy.ViewModels;
 
 namespace SoulBuddy.Services;
 
@@ -46,11 +47,12 @@ internal static class StreamUiInjector
             if (WindowStates.ContainsKey(window))
                 continue;
 
-            var tabControl = FindLiveDetailsTabControl(window);
-            if (tabControl is null)
+            var tabs = FindLiveDetailsTabControl(window);
+            var livePanel = tabs is null ? null : FindLivePanel(tabs);
+            if (tabs is null || livePanel is null)
                 continue;
 
-            var state = new StreamWindowState(tabControl);
+            var state = new StreamWindowState(window, livePanel);
             WindowStates[window] = state;
             window.Closed += (_, _) => Detach(window);
         }
@@ -65,12 +67,22 @@ internal static class StreamUiInjector
             {
                 var headers = control.Items
                     .OfType<TabItem>()
-                    .Select(item => item.Header?.ToString() ?? string.Empty)
+                    .Select(item => item.Header?.ToString())
                     .ToArray();
 
-                return headers.Contains("Live", StringComparer.Ordinal) &&
-                       headers.Contains("Details", StringComparer.Ordinal);
+                return headers.Any(header => LocalizationService.IsTranslationOf(header, "Live")) &&
+                       headers.Any(header => LocalizationService.IsTranslationOf(header, "Details"));
             });
+    }
+
+    private static StackPanel? FindLivePanel(TabControl tabs)
+    {
+        var liveTab = tabs.Items
+            .OfType<TabItem>()
+            .FirstOrDefault(item =>
+                LocalizationService.IsTranslationOf(item.Header?.ToString(), "Live"));
+
+        return (liveTab?.Content as ScrollViewer)?.Content as StackPanel;
     }
 
     private static void Detach(Window window)
@@ -86,6 +98,7 @@ internal static class StreamUiInjector
         private const int PreviewWidth = 256;
         private const int PreviewHeight = 192;
 
+        private readonly MainWindowViewModel? _viewModel;
         private readonly LocalStreamService _streamService = new();
         private readonly LanStreamDiscoveryService _lanDiscovery = new();
         private readonly WriteableBitmap _ownPreviewBitmap = CreatePreviewBitmap();
@@ -94,8 +107,9 @@ internal static class StreamUiInjector
         private readonly Image _partnerPreviewImage;
         private readonly TextBlock _ownPreviewPlaceholder;
         private readonly TextBlock _partnerPreviewPlaceholder;
-        private readonly TextBlock _ownStatusText;
-        private readonly TextBlock _partnerStatusText;
+        private readonly TextBlock _partnerActivityTitle;
+        private readonly TextBlock _partnerActivityText;
+        private readonly Border _partnerActivityCard;
         private readonly Button _startButton;
         private readonly CheckBox _showOverlayCheckBox;
         private readonly CheckBox _showGuiStreamsCheckBox;
@@ -104,13 +118,18 @@ internal static class StreamUiInjector
 
         private CancellationTokenSource? _partnerDiscoveryCancellation;
         private Task? _partnerDiscoveryTask;
+        private CancellationTokenSource? _partnerActivityCancellation;
+        private Task? _partnerActivityTask;
         private bool _startOperationRunning;
         private bool _partnerSearching;
         private bool _partnerConnected;
         private bool _disposed;
+        private string _partnerActivityTitleSource = string.Empty;
+        private string _partnerActivityTextSource = string.Empty;
 
-        public StreamWindowState(TabControl tabs)
+        public StreamWindowState(Window window, StackPanel livePanel)
         {
+            _viewModel = window.DataContext as MainWindowViewModel;
             _renderHiddenPath = LuaLaunchContext.ScopePath(
                 Path.Combine(FindRuntimeDirectory(), "stream-render.hidden"));
             TryDeleteFile(_renderHiddenPath);
@@ -123,75 +142,93 @@ internal static class StreamUiInjector
             _ownPreviewPlaceholder = PreviewPlaceholder("Nicht gestartet");
             _partnerPreviewPlaceholder = PreviewPlaceholder("Warte auf Partner-Stream");
 
-            _ownStatusText = Text(
-                _streamService.OutgoingStatus,
-                9,
-                FontWeight.Normal,
-                "#94A3B8",
+            _partnerActivityTitle = Text(
+                "Partner-Aktivität wird geladen …",
+                12,
+                FontWeight.Bold,
+                "#93C5FD",
                 wrap: true);
-            _partnerStatusText = Text(
-                "Noch kein Partner-Stream verbunden",
-                9,
+            _partnerActivityText = Text(
+                string.Empty,
+                11,
                 FontWeight.Normal,
-                "#94A3B8",
+                "#E2E8F0",
                 wrap: true);
+            _partnerActivityText.LineHeight = 17;
+            _partnerActivityCard = BuildPartnerActivityCard();
+            _partnerActivityCard.IsVisible = false;
 
             _startButton = CreateButton(StartButtonContent(isRunning: false));
             _startButton.HorizontalAlignment = HorizontalAlignment.Left;
             _startButton.Click += OnStartButtonClick;
 
             _showOverlayCheckBox = CreateVisibilityCheckBox(
-                "Stream im DeSmuME-Overlay anzeigen");
+                "Stream in DeSmuMe anzeigen");
             _showGuiStreamsCheckBox = CreateVisibilityCheckBox(
-                "Streams in SoulBuddy anzeigen");
+                "Streams hier anzeigen");
             _showOverlayCheckBox.Click += OnOverlayVisibilityClick;
             _showGuiStreamsCheckBox.Click += OnGuiVisibilityClick;
 
             _streamService.OutgoingFrameChanged += OnOwnFrameChanged;
             _streamService.IncomingFrameChanged += OnPartnerFrameChanged;
             _streamService.StatusChanged += OnStreamStatusChanged;
+            if (_viewModel is not null)
+                _viewModel.PropertyChanged += OnViewModelPropertyChanged;
 
             _previewContainer = BuildPreviewContainer();
 
-            tabs.Items.Add(new TabItem
-            {
-                Header = "Stream",
-                Content = new ScrollViewer
-                {
-                    Content = BuildPanel(),
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
-                }
-            });
+            // The original Live view already contains the local activity title/text.
+            // Label it explicitly, add the partner activity below it, then place the
+            // former Stream-tab content at the very bottom of the same Live panel.
+            livePanel.Children.Insert(0, Text(
+                "Du",
+                10,
+                FontWeight.SemiBold,
+                "#93C5FD"));
+            livePanel.Children.Add(_partnerActivityCard);
+            livePanel.Children.Add(BuildStreamingSection());
+
+            PublishLocalActivity();
         }
 
-        private Control BuildPanel()
+        private Border BuildPartnerActivityCard()
+        {
+            var panel = new StackPanel { Spacing = 6 };
+            panel.Children.Add(Text(
+                "Partner",
+                10,
+                FontWeight.SemiBold,
+                "#93C5FD"));
+            panel.Children.Add(_partnerActivityTitle);
+            panel.Children.Add(_partnerActivityText);
+            return Card(panel);
+        }
+
+        private Control BuildStreamingSection()
         {
             var root = new StackPanel
             {
-                Spacing = 12,
-                Margin = new Thickness(2)
+                Spacing = 10,
+                Margin = new Thickness(0, 10, 0, 0)
             };
 
+            root.Children.Add(new Border
+            {
+                Height = 1,
+                Background = Brush("#2B3C58"),
+                Margin = new Thickness(0, 2, 0, 5)
+            });
             root.Children.Add(Text(
                 "Streaming",
                 15,
                 FontWeight.Bold,
                 "#F8FAFC"));
 
-            root.Children.Add(Text(
-                "Startet deinen Stream in nativer DS-Auflösung und sucht anschließend automatisch im lokalen Netzwerk nach einem Partner-Stream.",
-                9,
-                FontWeight.Normal,
-                "#94A3B8",
-                wrap: true));
-
             var controls = new StackPanel { Spacing = 9 };
             controls.Children.Add(_startButton);
             controls.Children.Add(_showOverlayCheckBox);
             controls.Children.Add(_showGuiStreamsCheckBox);
             root.Children.Add(Card(controls));
-
             root.Children.Add(_previewContainer);
             return root;
         }
@@ -205,15 +242,13 @@ internal static class StreamUiInjector
             };
 
             var ownCard = PreviewCard(
-                "Eigener Stream",
+                "Du",
                 _ownPreviewImage,
-                _ownPreviewPlaceholder,
-                _ownStatusText);
+                _ownPreviewPlaceholder);
             var partnerCard = PreviewCard(
-                "Partner-Stream",
+                "Partner",
                 _partnerPreviewImage,
-                _partnerPreviewPlaceholder,
-                _partnerStatusText);
+                _partnerPreviewPlaceholder);
 
             grid.Children.Add(ownCard);
             Grid.SetColumn(partnerCard, 1);
@@ -224,8 +259,7 @@ internal static class StreamUiInjector
         private static Border PreviewCard(
             string title,
             Image image,
-            TextBlock placeholder,
-            TextBlock status)
+            TextBlock placeholder)
         {
             var panel = new StackPanel { Spacing = 7 };
             panel.Children.Add(Text(
@@ -242,7 +276,6 @@ internal static class StreamUiInjector
             viewport.Children.Add(image);
             viewport.Children.Add(placeholder);
             panel.Children.Add(viewport);
-            panel.Children.Add(status);
             return Card(panel);
         }
 
@@ -265,8 +298,9 @@ internal static class StreamUiInjector
             }
             catch (Exception ex)
             {
-                _ownStatusText.Text = $"Stream konnte nicht gestartet werden: {ex.Message}";
-                _ownStatusText.Foreground = Brush("#FCA5A5");
+                _ownPreviewImage.IsVisible = false;
+                _ownPreviewPlaceholder.IsVisible = true;
+                _ownPreviewPlaceholder.Text = $"Stream konnte nicht gestartet werden: {ex.Message}";
             }
             finally
             {
@@ -278,15 +312,18 @@ internal static class StreamUiInjector
 
         private async Task StartStreamingSessionAsync()
         {
+            PublishLocalActivity();
             var localUrl = await _streamService.StartOutgoingAsync();
 
             try
             {
                 await _lanDiscovery.StartAdvertisingAsync(localUrl);
                 StartPartnerDiscoveryLoop();
+                StartPartnerActivityLoop();
             }
             catch
             {
+                await StopPartnerActivityLoopAsync();
                 await _lanDiscovery.StopAdvertisingAsync();
                 await _streamService.StopOutgoingAsync();
                 throw;
@@ -296,8 +333,10 @@ internal static class StreamUiInjector
         private async Task StopStreamingSessionAsync()
         {
             await StopPartnerDiscoveryLoopAsync();
+            await StopPartnerActivityLoopAsync();
             _partnerSearching = false;
             _partnerConnected = false;
+            ClearPartnerActivity();
 
             await _streamService.SetIncomingUrlAsync(null);
             await _lanDiscovery.StopAdvertisingAsync();
@@ -331,7 +370,6 @@ internal static class StreamUiInjector
                     {
                         await _streamService.SetIncomingUrlAsync(url);
                         _partnerSearching = false;
-                        _partnerConnected = true;
                         Dispatcher.UIThread.Post(RefreshUi);
                         return;
                     }
@@ -356,6 +394,58 @@ internal static class StreamUiInjector
             }
         }
 
+        private void StartPartnerActivityLoop()
+        {
+            _partnerActivityCancellation?.Cancel();
+            _partnerActivityCancellation?.Dispose();
+
+            _partnerActivityCancellation = new CancellationTokenSource();
+            _partnerActivityTask = PartnerActivityLoopAsync(
+                _partnerActivityCancellation.Token);
+        }
+
+        private async Task PartnerActivityLoopAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var activity = await _lanDiscovery.QueryPartnerActivityAsync(cancellationToken);
+                    if (activity is not null)
+                    {
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            _partnerActivityTitleSource = activity.Value.Title;
+                            _partnerActivityTextSource = activity.Value.Text;
+                            _partnerActivityTitle.Text = string.IsNullOrWhiteSpace(activity.Value.Title)
+                                ? "Partner-Aktivität wird geladen …"
+                                : activity.Value.Title;
+                            _partnerActivityText.Text = activity.Value.Text;
+                            UpdatePartnerActivityVisibility();
+                        });
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch
+                {
+                    // Live activity is supplemental. Video reconnect/discovery must
+                    // continue even if a multicast activity request is dropped.
+                }
+
+                try
+                {
+                    await Task.Delay(650, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+
         private async Task StopPartnerDiscoveryLoopAsync()
         {
             var cancellation = _partnerDiscoveryCancellation;
@@ -367,18 +457,42 @@ internal static class StreamUiInjector
                 return;
 
             cancellation.Cancel();
-            if (task is not null)
-            {
-                try
-                {
-                    await task;
-                }
-                catch (OperationCanceledException)
-                {
-                }
-            }
-
+            await IgnoreCancellationAsync(task);
             cancellation.Dispose();
+        }
+
+        private async Task StopPartnerActivityLoopAsync()
+        {
+            var cancellation = _partnerActivityCancellation;
+            var task = _partnerActivityTask;
+            _partnerActivityCancellation = null;
+            _partnerActivityTask = null;
+
+            if (cancellation is null)
+                return;
+
+            cancellation.Cancel();
+            await IgnoreCancellationAsync(task);
+            cancellation.Dispose();
+        }
+
+        private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs eventArgs)
+        {
+            if (eventArgs.PropertyName is nameof(MainWindowViewModel.LiveEncounterTitle) or
+                nameof(MainWindowViewModel.LiveEncounterText))
+            {
+                PublishLocalActivity();
+            }
+        }
+
+        private void PublishLocalActivity()
+        {
+            if (_viewModel is null)
+                return;
+
+            _lanDiscovery.SetLocalActivity(
+                _viewModel.LiveEncounterTitle,
+                _viewModel.LiveEncounterText);
         }
 
         private void OnOverlayVisibilityClick(
@@ -475,30 +589,32 @@ internal static class StreamUiInjector
             if (_disposed)
                 return;
 
-            _ownStatusText.Text = _streamService.OutgoingStatus;
-            _ownStatusText.Foreground = Brush(
-                _streamService.IsOutgoingRunning ? "#A7F3D0" : "#94A3B8");
+            _partnerConnected = _streamService.IncomingStatus.StartsWith(
+                "Partner-Stream verbunden",
+                StringComparison.Ordinal);
 
-            if (_partnerSearching)
-            {
-                _partnerStatusText.Text = "Suche nach Partner-Stream im lokalen Netzwerk …";
-                _partnerStatusText.Foreground = Brush("#FDE68A");
-            }
-            else if (_partnerConnected)
-            {
-                _partnerStatusText.Text = _streamService.IncomingStatus;
-                _partnerStatusText.Foreground = Brush(
-                    _streamService.IncomingStatus.Contains("verbunden", StringComparison.OrdinalIgnoreCase)
-                        ? "#A7F3D0"
-                        : "#94A3B8");
-            }
-            else
-            {
-                _partnerStatusText.Text = "Noch kein Partner-Stream verbunden";
-                _partnerStatusText.Foreground = Brush("#94A3B8");
-            }
+            if (!_partnerConnected && !_partnerSearching)
+                _partnerPreviewPlaceholder.Text = "Warte auf Partner-Stream";
 
+            UpdatePartnerActivityVisibility();
             _startButton.Content = StartButtonContent(_streamService.IsOutgoingRunning);
+        }
+
+        private void UpdatePartnerActivityVisibility()
+        {
+            _partnerActivityCard.IsVisible =
+                _partnerConnected &&
+                (!string.IsNullOrWhiteSpace(_partnerActivityTitleSource) ||
+                 !string.IsNullOrWhiteSpace(_partnerActivityTextSource));
+        }
+
+        private void ClearPartnerActivity()
+        {
+            _partnerActivityTitleSource = string.Empty;
+            _partnerActivityTextSource = string.Empty;
+            _partnerActivityTitle.Text = "Partner-Aktivität wird geladen …";
+            _partnerActivityText.Text = string.Empty;
+            _partnerActivityCard.IsVisible = false;
         }
 
         public async ValueTask DisposeAsync()
@@ -513,14 +629,31 @@ internal static class StreamUiInjector
             _streamService.OutgoingFrameChanged -= OnOwnFrameChanged;
             _streamService.IncomingFrameChanged -= OnPartnerFrameChanged;
             _streamService.StatusChanged -= OnStreamStatusChanged;
+            if (_viewModel is not null)
+                _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
 
             await StopPartnerDiscoveryLoopAsync();
+            await StopPartnerActivityLoopAsync();
             await _lanDiscovery.DisposeAsync();
             await _streamService.DisposeAsync();
 
             TryDeleteFile(_renderHiddenPath);
             _ownPreviewBitmap.Dispose();
             _partnerPreviewBitmap.Dispose();
+        }
+
+        private static async Task IgnoreCancellationAsync(Task? task)
+        {
+            if (task is null)
+                return;
+
+            try
+            {
+                await task;
+            }
+            catch (OperationCanceledException)
+            {
+            }
         }
 
         private static WriteableBitmap CreatePreviewBitmap() => new(
@@ -592,7 +725,6 @@ internal static class StreamUiInjector
                     var sourceOffset = 11 + ((sourceY * sourceWidth + sourceX) * 4);
                     var targetOffset = x * 4;
 
-                    // DeSmuME's GD truecolor pixels are big-endian ARGB.
                     row[targetOffset] = data[sourceOffset + 3];
                     row[targetOffset + 1] = data[sourceOffset + 2];
                     row[targetOffset + 2] = data[sourceOffset + 1];
