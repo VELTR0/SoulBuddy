@@ -1,11 +1,13 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
-using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 
@@ -81,56 +83,78 @@ internal static class StreamUiInjector
 
     private sealed class StreamWindowState : IAsyncDisposable
     {
-        private readonly Window _window;
+        private const int PreviewWidth = 64;
+        private const int PreviewHeight = 48;
+
         private readonly LocalStreamService _streamService = new();
         private readonly LanStreamDiscoveryService _lanDiscovery = new();
-        private readonly DispatcherTimer _incomingDebounceTimer;
-        private readonly TextBox _incomingAddressBox;
-        private readonly TextBlock _incomingStatusText;
-        private readonly TextBox _outgoingAddressBox;
-        private readonly TextBlock _outgoingStatusText;
+        private readonly StreamPreviewClient _ownPreviewClient = new();
+        private readonly StreamPreviewClient _partnerPreviewClient = new();
+        private readonly WriteableBitmap _ownPreviewBitmap = CreatePreviewBitmap();
+        private readonly WriteableBitmap _partnerPreviewBitmap = CreatePreviewBitmap();
+        private readonly Image _ownPreviewImage;
+        private readonly Image _partnerPreviewImage;
+        private readonly TextBlock _ownPreviewPlaceholder;
+        private readonly TextBlock _partnerPreviewPlaceholder;
+        private readonly TextBlock _ownStatusText;
+        private readonly TextBlock _partnerStatusText;
         private readonly Button _startButton;
-        private readonly Button _copyButton;
-        private readonly Button _discoverLanButton;
+        private readonly CheckBox _showStreamsCheckBox;
+        private readonly Control _previewContainer;
+        private readonly string _renderHiddenPath;
+
+        private CancellationTokenSource? _partnerDiscoveryCancellation;
+        private Task? _partnerDiscoveryTask;
         private bool _startOperationRunning;
-        private bool _discoveryOperationRunning;
+        private bool _partnerSearching;
+        private bool _partnerConnected;
+        private bool _disposed;
 
         public StreamWindowState(Window window, TabControl tabs)
         {
-            _window = window;
-            _incomingAddressBox = CreateTextBox(
-                "http://127.0.0.1:PORT/stream",
-                isReadOnly: false);
-            _incomingStatusText = Text(
-                _streamService.IncomingStatus,
-                10,
-                FontWeight.Normal,
-                "#94A3B8");
-            _outgoingAddressBox = CreateTextBox(
-                string.Empty,
-                isReadOnly: true);
-            _outgoingAddressBox.Text = "Noch nicht gestartet";
-            _outgoingStatusText = Text(
+            _renderHiddenPath = LuaLaunchContext.ScopePath(
+                Path.Combine(FindRuntimeDirectory(), "stream-render.hidden"));
+            TryDeleteFile(_renderHiddenPath);
+
+            _ownPreviewImage = CreatePreviewImage(_ownPreviewBitmap);
+            _partnerPreviewImage = CreatePreviewImage(_partnerPreviewBitmap);
+            _ownPreviewImage.IsVisible = false;
+            _partnerPreviewImage.IsVisible = false;
+
+            _ownPreviewPlaceholder = PreviewPlaceholder("Nicht gestartet");
+            _partnerPreviewPlaceholder = PreviewPlaceholder("Warte auf Partner-Stream");
+
+            _ownStatusText = Text(
                 _streamService.OutgoingStatus,
-                10,
+                9,
                 FontWeight.Normal,
-                "#94A3B8");
+                "#94A3B8",
+                wrap: true);
+            _partnerStatusText = Text(
+                "Noch kein Partner-Stream verbunden",
+                9,
+                FontWeight.Normal,
+                "#94A3B8",
+                wrap: true);
 
-            _startButton = CreateButton("Start");
-            _copyButton = CreateButton("Kopieren");
-            _copyButton.IsEnabled = false;
-            _discoverLanButton = CreateButton("Lokalen Stream verbinden");
-
-            _incomingDebounceTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(650)
-            };
-            _incomingDebounceTimer.Tick += OnIncomingDebounceTick;
-            _incomingAddressBox.TextChanged += OnIncomingAddressChanged;
+            _startButton = CreateButton(StartButtonContent(isRunning: false));
+            _startButton.HorizontalAlignment = HorizontalAlignment.Left;
             _startButton.Click += OnStartButtonClick;
-            _copyButton.Click += OnCopyButtonClick;
-            _discoverLanButton.Click += OnDiscoverLanButtonClick;
+
+            _showStreamsCheckBox = new CheckBox
+            {
+                Content = "Stream-Vorschauen und DeSmuME-Overlay anzeigen",
+                IsChecked = true,
+                FontSize = 10,
+                Foreground = Brush("#CBD5E1")
+            };
+            _showStreamsCheckBox.Click += OnShowStreamsClick;
+
+            _ownPreviewClient.FrameChanged += OnOwnPreviewFrameChanged;
+            _partnerPreviewClient.FrameChanged += OnPartnerPreviewFrameChanged;
             _streamService.StatusChanged += OnStreamStatusChanged;
+
+            _previewContainer = BuildPreviewContainer();
 
             tabs.Items.Add(new TabItem
             {
@@ -153,115 +177,88 @@ internal static class StreamUiInjector
             };
 
             root.Children.Add(Text(
-                "Lokales Streaming",
+                "Streaming",
                 15,
                 FontWeight.Bold,
                 "#F8FAFC"));
 
-            var incomingPanel = new StackPanel { Spacing = 6 };
-            incomingPanel.Children.Add(Text(
-                "Stream ansehen",
-                11,
-                FontWeight.SemiBold,
-                "#E2E8F0"));
-            incomingPanel.Children.Add(_incomingAddressBox);
-            incomingPanel.Children.Add(_discoverLanButton);
-            incomingPanel.Children.Add(_incomingStatusText);
-            root.Children.Add(Card(incomingPanel));
-
-            var outgoingPanel = new StackPanel { Spacing = 6 };
-            outgoingPanel.Children.Add(Text(
-                "Eigenen oberen Bildschirm streamen",
-                11,
-                FontWeight.SemiBold,
-                "#E2E8F0"));
-
-            var addressRow = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-                ColumnSpacing = 6
-            };
-            addressRow.Children.Add(_outgoingAddressBox);
-            Grid.SetColumn(_copyButton, 1);
-            addressRow.Children.Add(_copyButton);
-            outgoingPanel.Children.Add(addressRow);
-
-            var actionRow = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
-                ColumnSpacing = 8
-            };
-            actionRow.Children.Add(_outgoingStatusText);
-            Grid.SetColumn(_startButton, 1);
-            actionRow.Children.Add(_startButton);
-            outgoingPanel.Children.Add(actionRow);
-            root.Children.Add(Card(outgoingPanel));
-
             root.Children.Add(Text(
-                "Start stellt den Stream zusätzlich im lokalen Netzwerk bereit. Der empfangene Stream erscheint als 64×48-Picture-in-Picture oben rechts im oberen DeSmuME-Bildschirm.",
+                "Startet deinen Stream und sucht anschließend automatisch im lokalen Netzwerk nach einem laufenden Partner-Stream.",
                 9,
                 FontWeight.Normal,
-                "#7C8BA1",
+                "#94A3B8",
                 wrap: true));
+
+            var controls = new StackPanel
+            {
+                Spacing = 9
+            };
+            controls.Children.Add(_startButton);
+            controls.Children.Add(_showStreamsCheckBox);
+            root.Children.Add(Card(controls));
+
+            root.Children.Add(_previewContainer);
 
             return root;
         }
 
-        private void OnIncomingAddressChanged(object? sender, TextChangedEventArgs eventArgs)
+        private Control BuildPreviewContainer()
         {
-            _incomingDebounceTimer.Stop();
-            _incomingDebounceTimer.Start();
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,*"),
+                ColumnSpacing = 10
+            };
+
+            var ownCard = PreviewCard(
+                "Eigener Stream",
+                _ownPreviewImage,
+                _ownPreviewPlaceholder,
+                _ownStatusText);
+            var partnerCard = PreviewCard(
+                "Partner-Stream",
+                _partnerPreviewImage,
+                _partnerPreviewPlaceholder,
+                _partnerStatusText);
+
+            grid.Children.Add(ownCard);
+            Grid.SetColumn(partnerCard, 1);
+            grid.Children.Add(partnerCard);
+            return grid;
         }
 
-        private async void OnIncomingDebounceTick(object? sender, EventArgs eventArgs)
+        private static Border PreviewCard(
+            string title,
+            Image image,
+            TextBlock placeholder,
+            TextBlock status)
         {
-            _incomingDebounceTimer.Stop();
-            await _streamService.SetIncomingUrlAsync(_incomingAddressBox.Text);
-            RefreshUi();
+            var panel = new StackPanel
+            {
+                Spacing = 7
+            };
+            panel.Children.Add(Text(
+                title,
+                10,
+                FontWeight.SemiBold,
+                "#E2E8F0"));
+
+            var viewport = new Grid
+            {
+                Height = 112,
+                Background = Brush("#09101D")
+            };
+            viewport.Children.Add(image);
+            viewport.Children.Add(placeholder);
+            panel.Children.Add(viewport);
+            panel.Children.Add(status);
+
+            return Card(panel);
         }
 
-        private async void OnDiscoverLanButtonClick(
+        private async void OnStartButtonClick(
             object? sender,
             Avalonia.Interactivity.RoutedEventArgs eventArgs)
-        {
-            if (_discoveryOperationRunning)
-                return;
-
-            _discoveryOperationRunning = true;
-            _discoverLanButton.IsEnabled = false;
-            _incomingStatusText.Text = "Suche nach laufendem SoulBuddy-Stream im lokalen Netzwerk …";
-            _incomingStatusText.Foreground = Brush("#FDE68A");
-
-            try
-            {
-                var url = await _lanDiscovery.DiscoverAsync();
-                if (string.IsNullOrWhiteSpace(url))
-                {
-                    _incomingStatusText.Text = "Kein laufender SoulBuddy-Stream im lokalen Netzwerk gefunden";
-                    _incomingStatusText.Foreground = Brush("#FDE68A");
-                    return;
-                }
-
-                _incomingAddressBox.Text = url;
-                _incomingDebounceTimer.Stop();
-                _incomingStatusText.Text = $"SoulBuddy-Stream gefunden: {url}";
-                _incomingStatusText.Foreground = Brush("#A7F3D0");
-                await _streamService.SetIncomingUrlAsync(url);
-                RefreshUi();
-            }
-            catch (Exception ex)
-            {
-                _incomingStatusText.Text = $"LAN-Suche fehlgeschlagen: {ex.Message}";
-                _incomingStatusText.Foreground = Brush("#FCA5A5");
-            }
-            finally
-            {
-                _discoveryOperationRunning = false;
-                _discoverLanButton.IsEnabled = true;
-            }
-        }
-
-        private async void OnStartButtonClick(object? sender, Avalonia.Interactivity.RoutedEventArgs eventArgs)
         {
             if (_startOperationRunning)
                 return;
@@ -273,27 +270,17 @@ internal static class StreamUiInjector
             {
                 if (_streamService.IsOutgoingRunning)
                 {
-                    await _lanDiscovery.StopAdvertisingAsync();
-                    await _streamService.StopOutgoingAsync();
+                    await StopStreamingSessionAsync();
                 }
                 else
                 {
-                    var localUrl = await _streamService.StartOutgoingAsync();
-                    try
-                    {
-                        await _lanDiscovery.StartAdvertisingAsync(localUrl);
-                    }
-                    catch
-                    {
-                        await _streamService.StopOutgoingAsync();
-                        throw;
-                    }
+                    await StartStreamingSessionAsync();
                 }
             }
             catch (Exception ex)
             {
-                _outgoingStatusText.Text = $"Stream konnte nicht gestartet werden: {ex.Message}";
-                _outgoingStatusText.Foreground = Brush("#FCA5A5");
+                _ownStatusText.Text = $"Stream konnte nicht gestartet werden: {ex.Message}";
+                _ownStatusText.Foreground = Brush("#FCA5A5");
             }
             finally
             {
@@ -303,19 +290,197 @@ internal static class StreamUiInjector
             }
         }
 
-        private async void OnCopyButtonClick(object? sender, Avalonia.Interactivity.RoutedEventArgs eventArgs)
+        private async Task StartStreamingSessionAsync()
         {
-            var url = DisplayOutgoingUrl();
-            if (string.IsNullOrWhiteSpace(url))
-                return;
+            var localUrl = await _streamService.StartOutgoingAsync();
 
-            var clipboard = TopLevel.GetTopLevel(_window)?.Clipboard;
-            if (clipboard is not null)
-                await clipboard.SetTextAsync(url);
+            try
+            {
+                await _ownPreviewClient.ConnectAsync(localUrl);
+                await _lanDiscovery.StartAdvertisingAsync(localUrl);
+                StartPartnerDiscoveryLoop();
+            }
+            catch
+            {
+                await _ownPreviewClient.DisconnectAsync();
+                await _lanDiscovery.StopAdvertisingAsync();
+                await _streamService.StopOutgoingAsync();
+                throw;
+            }
         }
 
-        private string? DisplayOutgoingUrl() =>
-            _lanDiscovery.LanUrl ?? _streamService.OutgoingUrl;
+        private async Task StopStreamingSessionAsync()
+        {
+            await StopPartnerDiscoveryLoopAsync();
+            _partnerSearching = false;
+            _partnerConnected = false;
+
+            await _partnerPreviewClient.DisconnectAsync();
+            await _streamService.SetIncomingUrlAsync(null);
+            await _lanDiscovery.StopAdvertisingAsync();
+            await _ownPreviewClient.DisconnectAsync();
+            await _streamService.StopOutgoingAsync();
+
+            _partnerPreviewPlaceholder.Text = "Warte auf Partner-Stream";
+            RefreshUi();
+        }
+
+        private void StartPartnerDiscoveryLoop()
+        {
+            _partnerDiscoveryCancellation?.Cancel();
+            _partnerDiscoveryCancellation?.Dispose();
+
+            _partnerSearching = true;
+            _partnerConnected = false;
+            _partnerDiscoveryCancellation = new CancellationTokenSource();
+            _partnerDiscoveryTask = DiscoverPartnerLoopAsync(
+                _partnerDiscoveryCancellation.Token);
+            RefreshUi();
+        }
+
+        private async Task DiscoverPartnerLoopAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    var url = await _lanDiscovery.DiscoverAsync(cancellationToken);
+                    if (!string.IsNullOrWhiteSpace(url))
+                    {
+                        await _streamService.SetIncomingUrlAsync(url);
+                        await _partnerPreviewClient.ConnectAsync(url);
+
+                        _partnerSearching = false;
+                        _partnerConnected = true;
+                        Dispatcher.UIThread.Post(RefreshUi);
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch
+                {
+                    // Discovery is best-effort. Keep searching until the user stops
+                    // the streaming session or another SoulBuddy stream is found.
+                }
+
+                try
+                {
+                    await Task.Delay(500, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+
+        private async Task StopPartnerDiscoveryLoopAsync()
+        {
+            var cancellation = _partnerDiscoveryCancellation;
+            var task = _partnerDiscoveryTask;
+            _partnerDiscoveryCancellation = null;
+            _partnerDiscoveryTask = null;
+
+            if (cancellation is null)
+                return;
+
+            cancellation.Cancel();
+            if (task is not null)
+            {
+                try
+                {
+                    await task;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+
+            cancellation.Dispose();
+        }
+
+        private void OnShowStreamsClick(
+            object? sender,
+            Avalonia.Interactivity.RoutedEventArgs eventArgs)
+        {
+            ApplyStreamVisibility();
+        }
+
+        private void ApplyStreamVisibility()
+        {
+            var visible = _showStreamsCheckBox.IsChecked != false;
+            _previewContainer.IsVisible = visible;
+
+            if (visible)
+            {
+                TryDeleteFile(_renderHiddenPath);
+            }
+            else
+            {
+                try
+                {
+                    var directory = Path.GetDirectoryName(_renderHiddenPath);
+                    if (!string.IsNullOrWhiteSpace(directory))
+                        Directory.CreateDirectory(directory);
+                    File.WriteAllText(_renderHiddenPath, "1");
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+
+        private void OnOwnPreviewFrameChanged(byte[]? frame)
+        {
+            Dispatcher.UIThread.Post(() =>
+                ApplyPreviewFrame(
+                    _ownPreviewBitmap,
+                    _ownPreviewImage,
+                    _ownPreviewPlaceholder,
+                    frame,
+                    _streamService.IsOutgoingRunning
+                        ? "Warte auf Videoframes"
+                        : "Nicht gestartet"));
+        }
+
+        private void OnPartnerPreviewFrameChanged(byte[]? frame)
+        {
+            Dispatcher.UIThread.Post(() =>
+                ApplyPreviewFrame(
+                    _partnerPreviewBitmap,
+                    _partnerPreviewImage,
+                    _partnerPreviewPlaceholder,
+                    frame,
+                    _partnerConnected
+                        ? "Kein Partnerbild"
+                        : "Warte auf Partner-Stream"));
+        }
+
+        private static void ApplyPreviewFrame(
+            WriteableBitmap bitmap,
+            Image image,
+            TextBlock placeholder,
+            byte[]? frame,
+            string emptyText)
+        {
+            if (frame is null || !TryWriteGdFrame(bitmap, frame))
+            {
+                image.IsVisible = false;
+                placeholder.Text = emptyText;
+                placeholder.IsVisible = true;
+                return;
+            }
+
+            image.IsVisible = true;
+            placeholder.IsVisible = false;
+            image.InvalidateVisual();
+        }
 
         private void OnStreamStatusChanged(object? sender, EventArgs eventArgs)
         {
@@ -324,38 +489,158 @@ internal static class StreamUiInjector
 
         private void RefreshUi()
         {
-            _incomingStatusText.Text = _streamService.IncomingStatus;
-            _incomingStatusText.Foreground = Brush(
-                _streamService.IncomingStatus.Contains("angezeigt", StringComparison.OrdinalIgnoreCase)
-                    ? "#A7F3D0"
-                    : "#94A3B8");
+            if (_disposed)
+                return;
 
-            _outgoingStatusText.Text = _streamService.OutgoingStatus;
-            _outgoingStatusText.Foreground = Brush(
+            _ownStatusText.Text = _streamService.OutgoingStatus;
+            _ownStatusText.Foreground = Brush(
                 _streamService.IsOutgoingRunning
                     ? "#A7F3D0"
                     : "#94A3B8");
 
-            var outgoingUrl = DisplayOutgoingUrl();
-            _outgoingAddressBox.Text = outgoingUrl ?? "Noch nicht gestartet";
-            _copyButton.IsEnabled = !string.IsNullOrWhiteSpace(outgoingUrl);
-            _startButton.Content = _streamService.IsOutgoingRunning
-                ? "Stop"
-                : "Start";
+            if (_partnerSearching)
+            {
+                _partnerStatusText.Text = "Suche nach Partner-Stream im lokalen Netzwerk …";
+                _partnerStatusText.Foreground = Brush("#FDE68A");
+            }
+            else if (_partnerConnected)
+            {
+                _partnerStatusText.Text = _streamService.IncomingStatus;
+                _partnerStatusText.Foreground = Brush(
+                    _streamService.IncomingStatus.Contains("angezeigt", StringComparison.OrdinalIgnoreCase)
+                        ? "#A7F3D0"
+                        : "#94A3B8");
+            }
+            else
+            {
+                _partnerStatusText.Text = "Noch kein Partner-Stream verbunden";
+                _partnerStatusText.Foreground = Brush("#94A3B8");
+            }
+
+            _startButton.Content = StartButtonContent(_streamService.IsOutgoingRunning);
         }
 
         public async ValueTask DisposeAsync()
         {
-            _incomingDebounceTimer.Stop();
-            _incomingDebounceTimer.Tick -= OnIncomingDebounceTick;
-            _incomingAddressBox.TextChanged -= OnIncomingAddressChanged;
+            if (_disposed)
+                return;
+
+            _disposed = true;
             _startButton.Click -= OnStartButtonClick;
-            _copyButton.Click -= OnCopyButtonClick;
-            _discoverLanButton.Click -= OnDiscoverLanButtonClick;
+            _showStreamsCheckBox.Click -= OnShowStreamsClick;
+            _ownPreviewClient.FrameChanged -= OnOwnPreviewFrameChanged;
+            _partnerPreviewClient.FrameChanged -= OnPartnerPreviewFrameChanged;
             _streamService.StatusChanged -= OnStreamStatusChanged;
+
+            await StopPartnerDiscoveryLoopAsync();
+            await _partnerPreviewClient.DisposeAsync();
+            await _ownPreviewClient.DisposeAsync();
             await _lanDiscovery.DisposeAsync();
             await _streamService.DisposeAsync();
+
+            TryDeleteFile(_renderHiddenPath);
+            _ownPreviewBitmap.Dispose();
+            _partnerPreviewBitmap.Dispose();
         }
+
+        private static WriteableBitmap CreatePreviewBitmap() => new(
+            new PixelSize(PreviewWidth, PreviewHeight),
+            new Vector(96, 96),
+            PixelFormats.Bgra8888,
+            AlphaFormat.Opaque);
+
+        private static Image CreatePreviewImage(WriteableBitmap bitmap) => new()
+        {
+            Source = bitmap,
+            Stretch = Stretch.Uniform,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+
+        private static TextBlock PreviewPlaceholder(string text) => new()
+        {
+            Text = text,
+            FontSize = 9,
+            Foreground = Brush("#64748B"),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(8)
+        };
+
+        private static bool TryWriteGdFrame(WriteableBitmap bitmap, byte[] data)
+        {
+            if (data.Length < 11 ||
+                data[0] != 0xFF ||
+                data[1] != 0xFE ||
+                data[6] != 1)
+            {
+                return false;
+            }
+
+            var sourceWidth = (data[2] << 8) | data[3];
+            var sourceHeight = (data[4] << 8) | data[5];
+            if (sourceWidth <= 0 || sourceHeight <= 0 ||
+                11L + ((long)sourceWidth * sourceHeight * 4L) != data.Length)
+            {
+                return false;
+            }
+
+            using var framebuffer = bitmap.Lock();
+            var row = new byte[PreviewWidth * 4];
+
+            for (var y = 0; y < PreviewHeight; y++)
+            {
+                var sourceY = Math.Min(
+                    sourceHeight - 1,
+                    (int)((long)y * sourceHeight / PreviewHeight));
+
+                for (var x = 0; x < PreviewWidth; x++)
+                {
+                    var sourceX = Math.Min(
+                        sourceWidth - 1,
+                        (int)((long)x * sourceWidth / PreviewWidth));
+                    var sourceOffset = 11 + ((sourceY * sourceWidth + sourceX) * 4);
+                    var targetOffset = x * 4;
+
+                    // GD truecolor pixels are stored as a big-endian ARGB dword.
+                    // The DS screen itself is opaque, so the preview uses full alpha.
+                    row[targetOffset] = data[sourceOffset + 3];
+                    row[targetOffset + 1] = data[sourceOffset + 2];
+                    row[targetOffset + 2] = data[sourceOffset + 1];
+                    row[targetOffset + 3] = 0xFF;
+                }
+
+                Marshal.Copy(
+                    row,
+                    0,
+                    IntPtr.Add(framebuffer.Address, y * framebuffer.RowBytes),
+                    row.Length);
+            }
+
+            return true;
+        }
+    }
+
+    private static Control StartButtonContent(bool isRunning)
+    {
+        var content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 7
+        };
+        content.Children.Add(Text(
+            isRunning ? "■" : "▶",
+            13,
+            FontWeight.Bold,
+            isRunning ? "#F87171" : "#4ADE80"));
+        content.Children.Add(Text(
+            isRunning ? "Stream stoppen" : "Stream starten",
+            10,
+            FontWeight.SemiBold,
+            "#E2E8F0"));
+        return content;
     }
 
     private static Border Card(Control child) => new()
@@ -368,24 +653,10 @@ internal static class StreamUiInjector
         Child = child
     };
 
-    private static TextBox CreateTextBox(string placeholder, bool isReadOnly) => new()
-    {
-        PlaceholderText = placeholder,
-        IsReadOnly = isReadOnly,
-        FontSize = 10,
-        Foreground = Brush("#E2E8F0"),
-        Background = Brush("#0F1829"),
-        BorderBrush = Brush("#344763"),
-        BorderThickness = new Thickness(1),
-        CornerRadius = new CornerRadius(6),
-        Padding = new Thickness(7, 5),
-        HorizontalAlignment = HorizontalAlignment.Stretch
-    };
-
-    private static Button CreateButton(string content) => new()
+    private static Button CreateButton(object content) => new()
     {
         Content = content,
-        Padding = new Thickness(9, 5),
+        Padding = new Thickness(11, 6),
         FontSize = 10,
         FontWeight = FontWeight.SemiBold,
         Background = Brush("#17243A"),
@@ -411,4 +682,48 @@ internal static class StreamUiInjector
 
     private static SolidColorBrush Brush(string color) =>
         new(Color.Parse(color));
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static string FindRuntimeDirectory()
+    {
+        var searchRoots = new[]
+        {
+            Directory.GetCurrentDirectory(),
+            AppContext.BaseDirectory
+        };
+
+        foreach (var root in searchRoots.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var directory = new DirectoryInfo(Path.GetFullPath(root));
+            while (directory is not null)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "appsettings.json")) &&
+                    Directory.Exists(Path.Combine(
+                        directory.FullName,
+                        "collectors",
+                        "desmume-gen4")))
+                {
+                    return Path.Combine(directory.FullName, "runtime");
+                }
+
+                directory = directory.Parent;
+            }
+        }
+
+        return Path.Combine(Directory.GetCurrentDirectory(), "runtime");
+    }
 }
