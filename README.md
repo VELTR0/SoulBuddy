@@ -29,7 +29,7 @@ Watch your SoulLink partner's game inside your emulator if you'd like to.
 </p>
 
 ## Installation & Setup
-- Download the latest release from the release tab
+- Download the latest release from the release tab (The "Soulbuddy.zip" file)
 - Unzip the folder somewhere on you computer
 - Run DeSmuMe, start the game and load a savegame
 - In the DeSmuMu menu click on Tools -> Lua Scripting -> New Lua Script Window
