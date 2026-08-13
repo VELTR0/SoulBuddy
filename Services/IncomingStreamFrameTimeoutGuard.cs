@@ -14,11 +14,11 @@ internal static class IncomingStreamFrameTimeoutGuard
     private static readonly TimeSpan FrameTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan CheckInterval = TimeSpan.FromMilliseconds(50);
     private static readonly string RuntimeDirectory = FindRuntimeDirectory();
-    private static readonly string IncomingFramePath = LuaLaunchContext.ScopePath(
+    private static string IncomingFramePath => LuaLaunchContext.ScopePath(
         Path.Combine(RuntimeDirectory, "stream-in.gd"));
-    private static readonly string IncomingSequencePath = LuaLaunchContext.ScopePath(
+    private static string IncomingSequencePath => LuaLaunchContext.ScopePath(
         Path.Combine(RuntimeDirectory, "stream-in.seq"));
-    private static readonly string IncomingAlivePath = LuaLaunchContext.ScopePath(
+    private static string IncomingAlivePath => LuaLaunchContext.ScopePath(
         Path.Combine(RuntimeDirectory, "stream-in.alive"));
 
     private static Timer? _timer;
