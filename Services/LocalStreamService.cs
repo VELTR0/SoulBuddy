@@ -11,7 +11,8 @@ internal sealed class LocalStreamService : IAsyncDisposable
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan StreamIdleTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan StaleFrameTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan StaleFrameTimeout = TimeSpan.FromSeconds(3);
+
     private const int MaximumFrameBytes = 2 * 1024 * 1024;
     private const int MaximumHttpHeaderBytes = 16 * 1024;
     private const int OverlayWidth = 64;
@@ -30,6 +31,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
     private Task? _captureBridgeTask;
     private CancellationTokenSource? _incomingCancellation;
     private Task? _incomingTask;
+
     private byte[]? _latestOutgoingFrame;
     private long _latestOutgoingVersion;
     private DateTimeOffset _lastCaptureAt = DateTimeOffset.MinValue;
@@ -52,6 +54,8 @@ internal sealed class LocalStreamService : IAsyncDisposable
     }
 
     public event EventHandler? StatusChanged;
+    public event Action<byte[]?>? OutgoingFrameChanged;
+    public event Action<byte[]?>? IncomingFrameChanged;
 
     public string? OutgoingUrl { get; private set; }
     public bool IsOutgoingRunning => _listener is not null;
@@ -84,10 +88,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
             _listener = listener;
             _outgoingCancellation = new CancellationTokenSource();
 
-            await File.WriteAllTextAsync(
-                _captureEnabledPath,
-                "1",
-                cancellationToken);
+            await File.WriteAllTextAsync(_captureEnabledPath, "1", cancellationToken);
 
             SetOutgoingStatus("Aufnahme gestartet · warte auf DeSmuME-Frames …");
             _captureBridgeTask = RunCaptureBridgeAsync(_outgoingCancellation.Token);
@@ -129,13 +130,15 @@ internal sealed class LocalStreamService : IAsyncDisposable
         if (string.IsNullOrWhiteSpace(text))
         {
             SetIncomingStatus("Kein Stream verbunden");
+            IncomingFrameChanged?.Invoke(null);
             return;
         }
 
         if (!Uri.TryCreate(text, UriKind.Absolute, out var uri) ||
             uri.Scheme != Uri.UriSchemeHttp)
         {
-            SetIncomingStatus("Ungültige Stream-Adresse · lokaler Test benötigt http://");
+            SetIncomingStatus("Ungültige Stream-Adresse");
+            IncomingFrameChanged?.Invoke(null);
             return;
         }
 
@@ -143,7 +146,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
             uri = new Uri(uri, "/stream");
 
         _incomingCancellation = new CancellationTokenSource();
-        SetIncomingStatus("Verbindung zum Stream wird hergestellt …");
+        SetIncomingStatus("Verbindung zum Partner-Stream wird hergestellt …");
         _incomingTask = RunIncomingClientAsync(uri, _incomingCancellation.Token);
     }
 
@@ -164,20 +167,18 @@ internal sealed class LocalStreamService : IAsyncDisposable
 
                     if (frame is not null)
                     {
-                        var smallFrame = ResizeGdNearest(
-                            frame,
-                            OverlayWidth,
-                            OverlayHeight);
-
+                        // Keep the exact DeSmuME top-screen frame (normally 256x192)
+                        // in the transport. Only the emulator overlay is downscaled.
                         lock (_latestFrameGate)
                         {
-                            _latestOutgoingFrame = smallFrame;
+                            _latestOutgoingFrame = frame;
                             _latestOutgoingVersion++;
                             _lastCaptureAt = DateTimeOffset.UtcNow;
                         }
 
+                        OutgoingFrameChanged?.Invoke(frame);
                         lastSequence = sequence.Value;
-                        SetOutgoingStatus("Aufnahme und Stream laufen");
+                        SetOutgoingStatus("Aufnahme und Stream laufen · 256×192");
                     }
                 }
 
@@ -197,8 +198,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
             }
             catch (IOException)
             {
-                // Lua may be replacing the frame/sequence files at this exact moment.
-                // The next poll retries without affecting connected viewers.
+                // Lua may replace the frame files while they are being polled.
             }
             catch (UnauthorizedAccessException)
             {
@@ -272,19 +272,16 @@ internal sealed class LocalStreamService : IAsyncDisposable
             }
             catch (IOException)
             {
-                // Viewer disconnected. The listener remains available for reconnects.
             }
             catch (SocketException)
             {
-                // Viewer disconnected. The listener remains available for reconnects.
             }
             catch (ObjectDisposedException)
             {
-                // Socket was closed while the instance was shutting down.
             }
             catch
             {
-                // A single viewer must never be able to terminate the stream server.
+                // One viewer must never terminate the stream server.
             }
         }
     }
@@ -294,8 +291,8 @@ internal sealed class LocalStreamService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         client.NoDelay = true;
-        client.SendBufferSize = 64 * 1024;
-        client.ReceiveBufferSize = 16 * 1024;
+        client.SendBufferSize = 512 * 1024;
+        client.ReceiveBufferSize = 32 * 1024;
 
         await using var networkStream = client.GetStream();
         using var reader = new StreamReader(
@@ -336,9 +333,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
             "Cache-Control: no-store, no-cache, must-revalidate\r\n" +
             "Pragma: no-cache\r\n" +
             "Connection: keep-alive\r\n\r\n";
-        await networkStream.WriteAsync(
-            Encoding.ASCII.GetBytes(header),
-            cancellationToken);
+        await networkStream.WriteAsync(Encoding.ASCII.GetBytes(header), cancellationToken);
         await networkStream.FlushAsync(cancellationToken);
 
         long lastSentVersion = -1;
@@ -359,10 +354,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
             var now = DateTimeOffset.UtcNow;
             if (frame is not null)
             {
-                await WriteFramePacketAsync(
-                    networkStream,
-                    frame,
-                    cancellationToken);
+                await WriteFramePacketAsync(networkStream, frame, cancellationToken);
                 lastSentVersion = version;
                 lastPacketAt = now;
             }
@@ -375,6 +367,151 @@ internal sealed class LocalStreamService : IAsyncDisposable
 
             await Task.Delay(SendPollInterval, cancellationToken);
         }
+    }
+
+    private async Task RunIncomingClientAsync(
+        Uri uri,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await RunIncomingConnectionAsync(uri, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (TimeoutException)
+            {
+                SetIncomingStatus("Partner-Stream reagiert nicht · verbinde neu …");
+                HideIncomingFrame();
+            }
+            catch (SocketException)
+            {
+                SetIncomingStatus("Partner-Stream getrennt · verbinde neu …");
+                HideIncomingFrame();
+            }
+            catch (IOException)
+            {
+                SetIncomingStatus("Partner-Stream getrennt · verbinde neu …");
+                HideIncomingFrame();
+            }
+            catch (InvalidDataException)
+            {
+                SetIncomingStatus("Partner-Stream liefert ungültige Videodaten");
+                HideIncomingFrame();
+            }
+            catch (Exception ex)
+            {
+                SetIncomingStatus($"Streamfehler ({ex.GetType().Name}) · verbinde neu …");
+                HideIncomingFrame();
+            }
+
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(ReconnectDelay, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    private async Task RunIncomingConnectionAsync(
+        Uri uri,
+        CancellationToken cancellationToken)
+    {
+        var port = uri.IsDefaultPort ? 80 : uri.Port;
+        using var client = new TcpClient();
+        client.NoDelay = true;
+        client.ReceiveBufferSize = 512 * 1024;
+        client.SendBufferSize = 32 * 1024;
+        await client.ConnectAsync(uri.Host, port, cancellationToken);
+
+        await using var stream = client.GetStream();
+        var pathAndQuery = string.IsNullOrWhiteSpace(uri.PathAndQuery)
+            ? "/stream"
+            : uri.PathAndQuery;
+        var request =
+            $"GET {pathAndQuery} HTTP/1.1\r\n" +
+            $"Host: {uri.Host}:{port}\r\n" +
+            "Accept: application/x-soulbuddy-gd-stream\r\n" +
+            "Connection: keep-alive\r\n\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(request), cancellationToken);
+        await stream.FlushAsync(cancellationToken);
+
+        var responseHeader = await ReadHttpHeaderAsync(stream, cancellationToken);
+        var firstLine = responseHeader.Split("\r\n", StringSplitOptions.None)[0];
+        if (!firstLine.Contains(" 200 ", StringComparison.Ordinal))
+            throw new IOException($"Stream antwortet nicht erfolgreich: {firstLine}");
+
+        SetIncomingStatus("Partner-Stream verbunden · warte auf Videoframes …");
+        var lastFrameAt = DateTimeOffset.MinValue;
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var lengthBuffer = new byte[4];
+            await ReadExactlyWithIdleTimeoutAsync(stream, lengthBuffer, cancellationToken);
+
+            var frameLength =
+                (lengthBuffer[0] << 24) |
+                (lengthBuffer[1] << 16) |
+                (lengthBuffer[2] << 8) |
+                lengthBuffer[3];
+
+            if (frameLength == 0)
+            {
+                if (lastFrameAt != DateTimeOffset.MinValue &&
+                    DateTimeOffset.UtcNow - lastFrameAt >= StaleFrameTimeout)
+                {
+                    HideIncomingFrame();
+                    SetIncomingStatus("Partner-Stream verbunden · kein Videosignal");
+                }
+
+                continue;
+            }
+
+            if (frameLength < 11 || frameLength > MaximumFrameBytes)
+                throw new InvalidDataException("Ungültige Stream-Framegröße.");
+
+            var frame = new byte[frameLength];
+            await ReadExactlyWithIdleTimeoutAsync(stream, frame, cancellationToken);
+
+            if (!TryGetGdDimensions(frame, out var width, out var height))
+                throw new InvalidDataException("Stream liefert ungültige Videodaten.");
+
+            // Preserve the full native frame for the SoulBuddy GUI. Only the
+            // DeSmuME picture-in-picture bridge receives the 64x48 derivative.
+            IncomingFrameChanged?.Invoke(frame);
+            var overlayFrame = width == OverlayWidth && height == OverlayHeight
+                ? frame
+                : ResizeGdNearest(frame, OverlayWidth, OverlayHeight);
+
+            lastFrameAt = DateTimeOffset.UtcNow;
+            if (await TryWriteFrameAtomicallyAsync(
+                    _incomingFramePath,
+                    overlayFrame,
+                    cancellationToken))
+            {
+                SetIncomingStatus($"Partner-Stream verbunden · {width}×{height}");
+            }
+            else
+            {
+                SetIncomingStatus("Partner-Stream verbunden · Overlay-Datei kurz belegt");
+            }
+        }
+    }
+
+    private void HideIncomingFrame()
+    {
+        TryDeleteFile(_incomingFramePath);
+        IncomingFrameChanged?.Invoke(null);
     }
 
     private static async Task WriteFramePacketAsync(
@@ -423,148 +560,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
         await stream.FlushAsync(cancellationToken);
     }
 
-    private async Task RunIncomingClientAsync(
-        Uri uri,
-        CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                await RunIncomingConnectionAsync(uri, cancellationToken);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (TimeoutException)
-            {
-                SetIncomingStatus("Stream reagiert nicht · Verbindung wird wiederhergestellt …");
-            }
-            catch (SocketException)
-            {
-                SetIncomingStatus("Stream getrennt · Verbindung wird wiederhergestellt …");
-            }
-            catch (IOException)
-            {
-                SetIncomingStatus("Stream getrennt · Verbindung wird wiederhergestellt …");
-            }
-            catch (InvalidDataException)
-            {
-                SetIncomingStatus("Stream liefert ungültige Videodaten · neuer Verbindungsversuch …");
-            }
-            catch (Exception ex)
-            {
-                SetIncomingStatus($"Streamfehler ({ex.GetType().Name}) · neuer Verbindungsversuch …");
-            }
-
-            if (!cancellationToken.IsCancellationRequested)
-            {
-                try
-                {
-                    await Task.Delay(ReconnectDelay, cancellationToken);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-            }
-        }
-    }
-
-    private async Task RunIncomingConnectionAsync(
-        Uri uri,
-        CancellationToken cancellationToken)
-    {
-        var port = uri.IsDefaultPort ? 80 : uri.Port;
-        using var client = new TcpClient();
-        client.NoDelay = true;
-        client.ReceiveBufferSize = 64 * 1024;
-        client.SendBufferSize = 16 * 1024;
-        await client.ConnectAsync(uri.Host, port, cancellationToken);
-
-        await using var stream = client.GetStream();
-        var pathAndQuery = string.IsNullOrWhiteSpace(uri.PathAndQuery)
-            ? "/stream"
-            : uri.PathAndQuery;
-        var request =
-            $"GET {pathAndQuery} HTTP/1.1\r\n" +
-            $"Host: {uri.Host}:{port}\r\n" +
-            "Accept: application/x-soulbuddy-gd-stream\r\n" +
-            "Connection: keep-alive\r\n\r\n";
-        await stream.WriteAsync(Encoding.ASCII.GetBytes(request), cancellationToken);
-        await stream.FlushAsync(cancellationToken);
-
-        var responseHeader = await ReadHttpHeaderAsync(stream, cancellationToken);
-        var firstLine = responseHeader.Split("\r\n", StringSplitOptions.None)[0];
-        if (!firstLine.Contains(" 200 ", StringComparison.Ordinal))
-            throw new IOException($"Stream antwortet nicht erfolgreich: {firstLine}");
-
-        SetIncomingStatus("Stream verbunden · warte auf Videoframes …");
-        var lastFrameAt = DateTimeOffset.MinValue;
-
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            var lengthBuffer = new byte[4];
-            await ReadExactlyWithIdleTimeoutAsync(
-                stream,
-                lengthBuffer,
-                cancellationToken);
-
-            var frameLength =
-                (lengthBuffer[0] << 24) |
-                (lengthBuffer[1] << 16) |
-                (lengthBuffer[2] << 8) |
-                lengthBuffer[3];
-
-            if (frameLength == 0)
-            {
-                if (lastFrameAt != DateTimeOffset.MinValue &&
-                    DateTimeOffset.UtcNow - lastFrameAt >= StaleFrameTimeout)
-                {
-                    // Keep the last valid frame visible. A temporary capture hiccup
-                    // should look frozen, not like the entire stream disappeared.
-                    SetIncomingStatus("Stream verbunden · Sender liefert keine neuen Frames");
-                }
-
-                continue;
-            }
-
-            if (frameLength < 11 || frameLength > MaximumFrameBytes)
-                throw new InvalidDataException("Ungültige Stream-Framegröße.");
-
-            var frame = new byte[frameLength];
-            await ReadExactlyWithIdleTimeoutAsync(
-                stream,
-                frame,
-                cancellationToken);
-
-            if (!TryGetGdDimensions(frame, out var width, out var height))
-                throw new InvalidDataException("Stream liefert ungültige Videodaten.");
-
-            var overlayFrame = width == OverlayWidth && height == OverlayHeight
-                ? frame
-                : ResizeGdNearest(frame, OverlayWidth, OverlayHeight);
-
-            lastFrameAt = DateTimeOffset.UtcNow;
-            if (await TryWriteFrameAtomicallyAsync(
-                    _incomingFramePath,
-                    overlayFrame,
-                    cancellationToken))
-            {
-                SetIncomingStatus("Stream wird im Overlay angezeigt");
-            }
-            else
-            {
-                // Lua can briefly hold the old overlay frame open while reading it.
-                // Dropping one frame is harmless; tearing down the TCP stream is not.
-                SetIncomingStatus("Stream verbunden · Overlay-Datei kurz belegt");
-            }
-        }
-    }
-
-    private async Task<long?> TryReadCaptureSequenceAsync(
-        CancellationToken cancellationToken)
+    private async Task<long?> TryReadCaptureSequenceAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -585,9 +581,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
             var data = new byte[checked((int)stream.Length)];
             await stream.ReadExactlyAsync(data, cancellationToken);
             var text = Encoding.ASCII.GetString(data).Trim();
-            return long.TryParse(text, out var value)
-                ? value
-                : null;
+            return long.TryParse(text, out var value) ? value : null;
         }
         catch (FileNotFoundException)
         {
@@ -610,10 +604,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
 
         while (memory.Length < MaximumHttpHeaderBytes)
         {
-            await ReadExactlyWithIdleTimeoutAsync(
-                stream,
-                oneByte,
-                cancellationToken);
+            await ReadExactlyWithIdleTimeoutAsync(stream, oneByte, cancellationToken);
             var value = oneByte[0];
             memory.WriteByte(value);
 
@@ -637,8 +628,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
         byte[] buffer,
         CancellationToken cancellationToken)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(StreamIdleTimeout);
 
         var offset = 0;
@@ -651,7 +641,6 @@ internal sealed class LocalStreamService : IAsyncDisposable
                     timeout.Token);
                 if (read == 0)
                     throw new EndOfStreamException("Der Stream wurde geschlossen.");
-
                 offset += read;
             }
         }
@@ -685,7 +674,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
         }
 
         if (deleteFrame)
-            TryDeleteFile(_incomingFramePath);
+            HideIncomingFrame();
     }
 
     private async Task StopOutgoingCoreAsync()
@@ -734,6 +723,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
             _lastCaptureAt = DateTimeOffset.MinValue;
         }
 
+        OutgoingFrameChanged?.Invoke(null);
         SetOutgoingStatus("Stream nicht gestartet");
     }
 
@@ -751,7 +741,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.ReadWrite | FileShare.Delete,
-                bufferSize: 64 * 1024,
+                bufferSize: 256 * 1024,
                 useAsync: true);
 
             if (stream.Length < 11 || stream.Length > MaximumFrameBytes)
@@ -759,9 +749,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
 
             var data = new byte[checked((int)stream.Length)];
             await stream.ReadExactlyAsync(data, cancellationToken);
-            return TryGetGdDimensions(data, out _, out _)
-                ? data
-                : null;
+            return TryGetGdDimensions(data, out _, out _) ? data : null;
         }
         catch (FileNotFoundException)
         {
@@ -773,10 +761,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
         }
     }
 
-    private static bool TryGetGdDimensions(
-        byte[] data,
-        out int width,
-        out int height)
+    private static bool TryGetGdDimensions(byte[] data, out int width, out int height)
     {
         width = 0;
         height = 0;
@@ -794,8 +779,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
         if (width <= 0 || height <= 0)
             return false;
 
-        var expectedLength = 11L + ((long)width * height * 4L);
-        return expectedLength == data.Length;
+        return 11L + ((long)width * height * 4L) == data.Length;
     }
 
     private static byte[] ResizeGdNearest(
@@ -853,10 +837,7 @@ internal sealed class LocalStreamService : IAsyncDisposable
         {
             try
             {
-                await File.WriteAllBytesAsync(
-                    temporaryPath,
-                    data,
-                    cancellationToken);
+                await File.WriteAllBytesAsync(temporaryPath, data, cancellationToken);
                 File.Move(temporaryPath, path, overwrite: true);
                 return true;
             }
