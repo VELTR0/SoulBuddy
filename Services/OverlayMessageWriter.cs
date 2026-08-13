@@ -189,7 +189,8 @@ public sealed class OverlayMessageWriter
         return value switch
         {
             "Finsterhöhle" or "Dark Cave" or "Placeholder 1" => "Dunkelhöhle",
-            "Sprout Tower" or "Placeholder 2" or "" => "Knofensaturm",
+            "Sprout Tower" or "Placeholder 2" => "Knofensaturm",
+            "" => "Unbekannter Ort",
             _ => value
         };
     }
