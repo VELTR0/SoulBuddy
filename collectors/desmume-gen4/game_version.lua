@@ -15,6 +15,27 @@ if autostart_result ~= true then
     error("SoulBuddy ist nicht bereit. Collector wird nicht initialisiert.")
 end
 
+-- DeSmuME's GUI primitives (especially gui.gdoverlay) must be redrawn from the
+-- GUI callback. soulbuddy_all.lua also has an emu.registerafter compatibility
+-- fallback, but letting that fallback drive the same drawing callbacks can make
+-- the rendered PiP alternate between present/absent depending on callback order.
+-- Suppress only that dispatcher registration; unrelated registerafter users keep
+-- the native emulator API.
+if emu ~= nil and type(emu.registerafter) == "function" then
+    local native_registerafter = emu.registerafter
+    emu.registerafter = function(callback)
+        local caller = debug.getinfo(2, "S")
+        local source = caller and caller.source or ""
+        source = string.gsub(source, "\\", "/")
+        if string.sub(source, -17) == "/soulbuddy_all.lua" or
+           source == "@soulbuddy_all.lua" then
+            print("[Stream] emu.registerafter-GUI-Fallback deaktiviert; Rendering läuft über gui.register.")
+            return true
+        end
+        return native_registerafter(callback)
+    end
+end
+
 -- Smooth the tiny no-file window that can occur while the receiver atomically
 -- replaces an incoming video frame. Failure is non-fatal; streaming can still run.
 local guard_ok, guard_result = pcall(function()
