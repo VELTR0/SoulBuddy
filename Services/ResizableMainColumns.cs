@@ -65,10 +65,8 @@ internal static class ResizableMainColumns
         var teamHeader = window
             .GetVisualDescendants()
             .OfType<TextBlock>()
-            .FirstOrDefault(text => string.Equals(
-                text.Text,
-                "Aktuelles Team",
-                StringComparison.Ordinal));
+            .FirstOrDefault(text =>
+                LocalizationService.IsTranslationOf(text.Text, "Aktuelles Team"));
 
         var teamCard = teamHeader?
             .GetVisualAncestors()
