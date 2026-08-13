@@ -1,4 +1,6 @@
+using System.Net.Http;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -9,9 +11,41 @@ namespace SoulBuddy.Services;
 
 internal static class LocalizationUiInjector
 {
+    private const string LocationNamesUrl =
+        "https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/location_names.csv";
+
     private static readonly ConditionalWeakTable<AvaloniaObject, ControlLocalizationState> States = new();
     private static readonly HashSet<MenuItem> WiredLanguageItems = [];
+    private static readonly object LocationSync = new();
+    private static readonly HttpClient LocationHttpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
+    private static readonly Dictionary<int, Dictionary<string, string>> LocationNames = [];
+    private static readonly Dictionary<string, int> LocationIdsByName =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static bool _locationDownloadStarted;
     private static DispatcherTimer? _timer;
+
+    private static readonly Dictionary<string, string> LocationAliases =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Finsterhöhle"] = "Dunkelhöhle",
+            ["Knofensaturm"] = "Knofensa-Turm",
+            ["Einheitshöhle"] = "Einheitstunnel",
+            ["Digdas Höhle"] = "Digda-Höhle",
+            ["Ruinen von Teak City"] = "Turmruine",
+            ["Rocket-Versteck"] = "Team Rocket-Hauptquartier",
+            ["Dukatia-Tunnel"] = "Dukatia-Passage",
+            ["Silberberghöhle"] = "Silberberg (Höhle)",
+            ["Pokéathlon-Hallen"] = "Pokéathlon",
+            ["Safari-Zonen-Eingang"] = "Safari-Eingang",
+            ["Felsenhöhle"] = "Felsschlundhöhle",
+            ["Zugang zur Kampfzone"] = "Kampfzonenzugang",
+            ["Erholungsgebiet"] = "Erholungsareal",
+            ["Feuriohütte"] = "Feurio-Hütte",
+            ["Frühlingspfad"] = "Quellenpfad",
+            ["Fernes Land"] = "Entferntes Land",
+            ["Reisender Mann"] = "Reisender",
+            ["Pensionsleiter"] = "Pensions-Paar"
+        };
 
     private static readonly string[][] LiveExactPhrases =
     [
@@ -26,7 +60,10 @@ internal static class LocalizationUiInjector
         P("Warte auf Videoframes", "Waiting for video frames", "En attente des images vidéo", "Esperando fotogramas", "In attesa dei frame video", "映像フレーム待機中"),
         P("Warte auf Partner-Stream", "Waiting for partner stream", "En attente du stream du partenaire", "Esperando el stream del compañero", "In attesa dello stream del compagno", "パートナーのストリーム待機中"),
         P("Kein Partnerbild", "No partner video", "Aucune image du partenaire", "Sin imagen del compañero", "Nessuna immagine del compagno", "パートナー映像なし"),
-        P("Partner-Aktivität wird geladen …", "Loading partner activity …", "Chargement de l’activité du partenaire …", "Cargando actividad del compañero …", "Caricamento attività del compagno …", "パートナーのアクティビティを読み込み中…")
+        P("Partner-Aktivität wird geladen …", "Loading partner activity …", "Chargement de l’activité du partenaire …", "Cargando actividad del compañero …", "Caricamento attività del compagno …", "パートナーのアクティビティを読み込み中…"),
+        P("VERKNÜPFT MIT", "LINKED WITH", "LIÉ À", "VINCULADO CON", "COLLEGATO A", "リンク先"),
+        P("KAMPFUNFÄHIG", "FAINTED", "K.O.", "DEBILITADO", "KO", "ひんし"),
+        P("Noch nicht\nverknüpft", "Not linked\nyet", "Pas encore\nlié", "Aún no\nvinculado", "Non ancora\ncollegato", "未リンク")
     ];
 
     private static readonly string[][] LiveFragmentPhrases =
@@ -43,6 +80,9 @@ internal static class LocalizationUiInjector
     [ModuleInitializer]
     internal static void Initialize()
     {
+        TryLoadLocationNames(GetLocationCachePath());
+        StartLocationNameDownloadIfNeeded();
+
         Dispatcher.UIThread.Post(() =>
         {
             LocalizationService.LanguageChanged += (_, _) => Dispatcher.UIThread.Post(ApplyToOpenWindows);
@@ -173,25 +213,111 @@ internal static class LocalizationUiInjector
     private static string TranslateUi(string source)
     {
         var translated = LocalizationService.Ui(source);
-        if (LocalizationService.CurrentLanguage == AppLanguage.German)
-            return translated;
 
-        var exact = LiveExactPhrases.FirstOrDefault(phrase =>
-            phrase.Any(value => string.Equals(value, translated, StringComparison.Ordinal)) ||
-            string.Equals(phrase[0], source, StringComparison.Ordinal));
-        if (exact is not null)
-            translated = GetLiveTranslation(exact);
-
-        foreach (var phrase in LiveFragmentPhrases.OrderByDescending(item => item[0].Length))
+        if (LocalizationService.CurrentLanguage != AppLanguage.German)
         {
-            if (translated.Contains(phrase[0], StringComparison.Ordinal))
-                translated = translated.Replace(
-                    phrase[0],
-                    GetLiveTranslation(phrase),
-                    StringComparison.Ordinal);
+            var exact = LiveExactPhrases.FirstOrDefault(phrase =>
+                phrase.Any(value => string.Equals(value, translated, StringComparison.Ordinal)) ||
+                string.Equals(phrase[0], source, StringComparison.Ordinal));
+            if (exact is not null)
+                translated = GetLiveTranslation(exact);
+
+            foreach (var phrase in LiveFragmentPhrases.OrderByDescending(item => item[0].Length))
+            {
+                if (translated.Contains(phrase[0], StringComparison.Ordinal))
+                {
+                    translated = translated.Replace(
+                        phrase[0],
+                        GetLiveTranslation(phrase),
+                        StringComparison.Ordinal);
+                }
+            }
         }
 
-        return translated;
+        return TranslateLocations(translated);
+    }
+
+    private static string TranslateLocations(string source)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+            return source;
+
+        lock (LocationSync)
+        {
+            if (LocationIdsByName.Count == 0)
+                return source;
+        }
+
+        var separator = source.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var lines = source.Replace("\r\n", "\n").Split('\n');
+        for (var index = 0; index < lines.Length; index++)
+            lines[index] = TranslateLocationLine(lines[index]);
+        return string.Join(separator, lines);
+    }
+
+    private static string TranslateLocationLine(string line)
+    {
+        var trimmed = line.Trim();
+        if (TryTranslateLocationName(trimmed, out var exact))
+            return ReplaceTrimmedValue(line, trimmed, exact);
+
+        const string pinMarker = "📍 ";
+        var pinIndex = line.IndexOf(pinMarker, StringComparison.Ordinal);
+        if (pinIndex >= 0)
+        {
+            var valueStart = pinIndex + pinMarker.Length;
+            var candidate = line[valueStart..].Trim();
+            if (TryTranslateLocationName(candidate, out var translated))
+                return line[..valueStart] + translated;
+        }
+
+        var separatorIndex = line.LastIndexOf(": ", StringComparison.Ordinal);
+        if (separatorIndex >= 0)
+        {
+            var valueStart = separatorIndex + 2;
+            var candidate = line[valueStart..].Trim();
+            if (TryTranslateLocationName(candidate, out var translated))
+                return line[..valueStart] + translated;
+        }
+
+        return line;
+    }
+
+    private static string ReplaceTrimmedValue(string line, string trimmed, string replacement)
+    {
+        if (trimmed.Length == 0)
+            return line;
+
+        var index = line.IndexOf(trimmed, StringComparison.Ordinal);
+        return index < 0
+            ? replacement
+            : line[..index] + replacement + line[(index + trimmed.Length)..];
+    }
+
+    private static bool TryTranslateLocationName(string source, out string translated)
+    {
+        translated = source;
+        if (string.IsNullOrWhiteSpace(source))
+            return false;
+
+        var lookup = LocationAliases.TryGetValue(source.Trim(), out var alias)
+            ? alias
+            : source.Trim();
+        var languageCode = LocationLanguageCode(LocalizationService.CurrentLanguage);
+
+        lock (LocationSync)
+        {
+            if (!LocationIdsByName.TryGetValue(lookup, out var locationId) ||
+                !LocationNames.TryGetValue(locationId, out var names) ||
+                !names.TryGetValue(languageCode, out var target) ||
+                string.IsNullOrWhiteSpace(target))
+            {
+                return false;
+            }
+
+            translated = target;
+            return !string.Equals(source, target, StringComparison.Ordinal);
+        }
     }
 
     private static string GetLiveTranslation(string[] translations) =>
@@ -204,6 +330,16 @@ internal static class LocalizationUiInjector
             AppLanguage.Japanese => 5,
             _ => 0
         }];
+
+    private static string LocationLanguageCode(AppLanguage language) => language switch
+    {
+        AppLanguage.English => "en",
+        AppLanguage.French => "fr",
+        AppLanguage.Spanish => "es",
+        AppLanguage.Italian => "it",
+        AppLanguage.Japanese => "ja",
+        _ => "de"
+    };
 
     private static string[] P(string de, string en, string fr, string es, string it, string ja) =>
         [de, en, fr, es, it, ja];
@@ -255,6 +391,114 @@ internal static class LocalizationUiInjector
         value.Contains("🇪🇸", StringComparison.Ordinal) ||
         value.Contains("🇮🇹", StringComparison.Ordinal) ||
         value.Contains("🇯🇵", StringComparison.Ordinal);
+
+    private static void StartLocationNameDownloadIfNeeded()
+    {
+        lock (LocationSync)
+        {
+            if (LocationNames.Count >= 100 || _locationDownloadStarted)
+                return;
+            _locationDownloadStarted = true;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var csv = await LocationHttpClient.GetStringAsync(LocationNamesUrl);
+                var path = GetLocationCachePath();
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                await File.WriteAllTextAsync(path, csv, new UTF8Encoding(false));
+                LoadLocationNamesCsv(csv);
+                Dispatcher.UIThread.Post(ApplyToOpenWindows);
+            }
+            catch
+            {
+                // Location localization is optional; canonical game names remain usable.
+            }
+        });
+    }
+
+    private static void TryLoadLocationNames(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                LoadLocationNamesCsv(File.ReadAllText(path));
+        }
+        catch
+        {
+            // A missing or malformed cache simply falls back to canonical names.
+        }
+    }
+
+    private static void LoadLocationNamesCsv(string csv)
+    {
+        var byId = new Dictionary<int, Dictionary<string, string>>();
+
+        foreach (var line in csv.Split('\n').Skip(1))
+        {
+            var fields = line.TrimEnd('\r').Split(',', 4);
+            if (fields.Length < 3 ||
+                !int.TryParse(fields[0], out var locationId) ||
+                !int.TryParse(fields[1], out var languageId))
+            {
+                continue;
+            }
+
+            var language = languageId switch
+            {
+                1 => "ja",
+                5 => "fr",
+                6 => "de",
+                7 => "es",
+                8 => "it",
+                9 => "en",
+                _ => string.Empty
+            };
+            if (language.Length == 0)
+                continue;
+
+            var name = fields[2].Trim().Trim('"').Replace("\"\"", "\"", StringComparison.Ordinal);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            if (!byId.TryGetValue(locationId, out var names))
+            {
+                names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                byId[locationId] = names;
+            }
+            names[language] = name;
+        }
+
+        if (byId.Count < 100)
+            return;
+
+        lock (LocationSync)
+        {
+            LocationNames.Clear();
+            LocationIdsByName.Clear();
+
+            foreach (var pair in byId)
+            {
+                LocationNames[pair.Key] = pair.Value;
+                foreach (var name in pair.Value.Values)
+                {
+                    if (!string.IsNullOrWhiteSpace(name))
+                        LocationIdsByName[name] = pair.Key;
+                }
+            }
+
+            foreach (var alias in LocationAliases)
+            {
+                if (LocationIdsByName.TryGetValue(alias.Value, out var id))
+                    LocationIdsByName[alias.Key] = id;
+            }
+        }
+    }
+
+    private static string GetLocationCachePath() =>
+        Path.Combine(AppContext.BaseDirectory, "data", "location-names.csv");
 
     private sealed class ControlLocalizationState
     {
