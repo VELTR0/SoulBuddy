@@ -15,6 +15,7 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
 
     private readonly string _instanceId =
         LuaLaunchContext.SafeToken ?? $"{Environment.MachineName}-{Environment.ProcessId}-{Guid.NewGuid():N}";
+    private readonly object _partnerGate = new();
 
     private TcpListener? _proxyListener;
     private UdpClient? _advertisingSocket;
@@ -23,6 +24,15 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
     private Task? _discoveryResponderTask;
     private int _sourcePort;
     private int _proxyPort;
+
+    // The video receiver connects to this stable loopback proxy instead of directly
+    // to the partner's LAN proxy. When the partner restarts and gets a new port, the
+    // next connection through this resolver performs discovery again automatically.
+    private TcpListener? _partnerResolverListener;
+    private CancellationTokenSource? _partnerResolverCancellation;
+    private Task? _partnerResolverTask;
+    private int _partnerResolverPort;
+    private string? _lastPartnerUrl;
 
     public string? LanUrl { get; private set; }
     public bool IsAdvertising => _proxyListener is not null;
@@ -74,6 +84,8 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
 
     public async Task StopAdvertisingAsync()
     {
+        await StopPartnerResolverAsync();
+
         var cancellation = _advertisingCancellation;
         var proxyTask = _proxyTask;
         var discoveryTask = _discoveryResponderTask;
@@ -100,6 +112,20 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
 
     public async Task<string?> DiscoverAsync(
         CancellationToken cancellationToken = default)
+    {
+        var remoteUrl = await DiscoverRemoteAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(remoteUrl))
+            return null;
+
+        lock (_partnerGate)
+            _lastPartnerUrl = remoteUrl;
+
+        EnsurePartnerResolverStarted();
+        return $"http://127.0.0.1:{_partnerResolverPort}/stream";
+    }
+
+    private async Task<string?> DiscoverRemoteAsync(
+        CancellationToken cancellationToken)
     {
         using var client = new UdpClient(AddressFamily.InterNetwork);
         client.Client.Bind(new IPEndPoint(IPAddress.Any, 0));
@@ -149,6 +175,194 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
         }
 
         return null;
+    }
+
+    private void EnsurePartnerResolverStarted()
+    {
+        if (_partnerResolverListener is not null)
+            return;
+
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        _partnerResolverListener = listener;
+        _partnerResolverPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+        _partnerResolverCancellation = new CancellationTokenSource();
+        _partnerResolverTask = RunPartnerResolverAsync(
+            listener,
+            _partnerResolverCancellation.Token);
+    }
+
+    private async Task RunPartnerResolverAsync(
+        TcpListener listener,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                var client = await listener.AcceptTcpClientAsync(cancellationToken);
+                _ = ResolvePartnerClientSafelyAsync(client, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (SocketException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (SocketException)
+            {
+                await DelayBrieflyAsync(cancellationToken);
+            }
+        }
+    }
+
+    private async Task ResolvePartnerClientSafelyAsync(
+        TcpClient localViewer,
+        CancellationToken cancellationToken)
+    {
+        using (localViewer)
+        {
+            try
+            {
+                localViewer.NoDelay = true;
+
+                // First try the last endpoint. If the partner restarted, that port may
+                // be gone; discard it and discover the current advertised endpoint.
+                var remoteUrl = GetLastPartnerUrl();
+                if (!await TryProxyToPartnerAsync(
+                        localViewer,
+                        remoteUrl,
+                        cancellationToken))
+                {
+                    ClearLastPartnerUrl(remoteUrl);
+                    remoteUrl = await DiscoverRemoteAsync(cancellationToken);
+                    if (string.IsNullOrWhiteSpace(remoteUrl))
+                        return;
+
+                    lock (_partnerGate)
+                        _lastPartnerUrl = remoteUrl;
+
+                    if (!await TryProxyToPartnerAsync(
+                            localViewer,
+                            remoteUrl,
+                            cancellationToken))
+                    {
+                        ClearLastPartnerUrl(remoteUrl);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (IOException)
+            {
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+    }
+
+    private async Task<bool> TryProxyToPartnerAsync(
+        TcpClient localViewer,
+        string? remoteUrl,
+        CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(remoteUrl, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttp)
+        {
+            return false;
+        }
+
+        var port = uri.IsDefaultPort ? 80 : uri.Port;
+        using var remoteClient = new TcpClient(AddressFamily.InterNetwork);
+        try
+        {
+            remoteClient.NoDelay = true;
+            await remoteClient.ConnectAsync(uri.Host, port, cancellationToken);
+
+            await using var localStream = localViewer.GetStream();
+            await using var remoteStream = remoteClient.GetStream();
+            using var connectionCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            var toRemote = localStream.CopyToAsync(
+                remoteStream,
+                64 * 1024,
+                connectionCancellation.Token);
+            var toLocal = remoteStream.CopyToAsync(
+                localStream,
+                64 * 1024,
+                connectionCancellation.Token);
+
+            await Task.WhenAny(toRemote, toLocal);
+            connectionCancellation.Cancel();
+
+            try
+            {
+                await Task.WhenAll(toRemote, toLocal);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+    }
+
+    private string? GetLastPartnerUrl()
+    {
+        lock (_partnerGate)
+            return _lastPartnerUrl;
+    }
+
+    private void ClearLastPartnerUrl(string? expectedUrl)
+    {
+        lock (_partnerGate)
+        {
+            if (string.Equals(_lastPartnerUrl, expectedUrl, StringComparison.Ordinal))
+                _lastPartnerUrl = null;
+        }
+    }
+
+    private async Task StopPartnerResolverAsync()
+    {
+        var cancellation = _partnerResolverCancellation;
+        var task = _partnerResolverTask;
+        var listener = _partnerResolverListener;
+
+        _partnerResolverCancellation = null;
+        _partnerResolverTask = null;
+        _partnerResolverListener = null;
+        _partnerResolverPort = 0;
+        lock (_partnerGate)
+            _lastPartnerUrl = null;
+
+        cancellation?.Cancel();
+        listener?.Stop();
+        await IgnoreShutdownAsync(task);
+        cancellation?.Dispose();
     }
 
     private UdpClient CreateMulticastListener()
@@ -272,11 +486,11 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
 
                 var toLocal = lanStream.CopyToAsync(
                     localStream,
-                    32 * 1024,
+                    64 * 1024,
                     connectionCancellation.Token);
                 var toLan = localStream.CopyToAsync(
                     lanStream,
-                    32 * 1024,
+                    64 * 1024,
                     connectionCancellation.Token);
 
                 await Task.WhenAny(toLocal, toLan);
