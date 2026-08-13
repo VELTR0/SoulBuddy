@@ -83,6 +83,7 @@ internal static class StreamUiInjector
     {
         private readonly Window _window;
         private readonly LocalStreamService _streamService = new();
+        private readonly LanStreamDiscoveryService _lanDiscovery = new();
         private readonly DispatcherTimer _incomingDebounceTimer;
         private readonly TextBox _incomingAddressBox;
         private readonly TextBlock _incomingStatusText;
@@ -90,7 +91,9 @@ internal static class StreamUiInjector
         private readonly TextBlock _outgoingStatusText;
         private readonly Button _startButton;
         private readonly Button _copyButton;
+        private readonly Button _discoverLanButton;
         private bool _startOperationRunning;
+        private bool _discoveryOperationRunning;
 
         public StreamWindowState(Window window, TabControl tabs)
         {
@@ -116,6 +119,7 @@ internal static class StreamUiInjector
             _startButton = CreateButton("Start");
             _copyButton = CreateButton("Kopieren");
             _copyButton.IsEnabled = false;
+            _discoverLanButton = CreateButton("Lokalen Stream verbinden");
 
             _incomingDebounceTimer = new DispatcherTimer
             {
@@ -125,6 +129,7 @@ internal static class StreamUiInjector
             _incomingAddressBox.TextChanged += OnIncomingAddressChanged;
             _startButton.Click += OnStartButtonClick;
             _copyButton.Click += OnCopyButtonClick;
+            _discoverLanButton.Click += OnDiscoverLanButtonClick;
             _streamService.StatusChanged += OnStreamStatusChanged;
 
             tabs.Items.Add(new TabItem
@@ -160,6 +165,7 @@ internal static class StreamUiInjector
                 FontWeight.SemiBold,
                 "#E2E8F0"));
             incomingPanel.Children.Add(_incomingAddressBox);
+            incomingPanel.Children.Add(_discoverLanButton);
             incomingPanel.Children.Add(_incomingStatusText);
             root.Children.Add(Card(incomingPanel));
 
@@ -192,7 +198,7 @@ internal static class StreamUiInjector
             root.Children.Add(Card(outgoingPanel));
 
             root.Children.Add(Text(
-                "Der empfangene Stream erscheint als 64×48-Picture-in-Picture oben rechts im oberen DeSmuME-Bildschirm. SoulBuddy-Meldungen werden weiterhin darüber gezeichnet.",
+                "Start stellt den Stream zusätzlich im lokalen Netzwerk bereit. Der empfangene Stream erscheint als 64×48-Picture-in-Picture oben rechts im oberen DeSmuME-Bildschirm.",
                 9,
                 FontWeight.Normal,
                 "#7C8BA1",
@@ -214,6 +220,47 @@ internal static class StreamUiInjector
             RefreshUi();
         }
 
+        private async void OnDiscoverLanButtonClick(
+            object? sender,
+            Avalonia.Interactivity.RoutedEventArgs eventArgs)
+        {
+            if (_discoveryOperationRunning)
+                return;
+
+            _discoveryOperationRunning = true;
+            _discoverLanButton.IsEnabled = false;
+            _incomingStatusText.Text = "Suche nach laufendem SoulBuddy-Stream im lokalen Netzwerk …";
+            _incomingStatusText.Foreground = Brush("#FDE68A");
+
+            try
+            {
+                var url = await _lanDiscovery.DiscoverAsync();
+                if (string.IsNullOrWhiteSpace(url))
+                {
+                    _incomingStatusText.Text = "Kein laufender SoulBuddy-Stream im lokalen Netzwerk gefunden";
+                    _incomingStatusText.Foreground = Brush("#FDE68A");
+                    return;
+                }
+
+                _incomingAddressBox.Text = url;
+                _incomingDebounceTimer.Stop();
+                _incomingStatusText.Text = $"SoulBuddy-Stream gefunden: {url}";
+                _incomingStatusText.Foreground = Brush("#A7F3D0");
+                await _streamService.SetIncomingUrlAsync(url);
+                RefreshUi();
+            }
+            catch (Exception ex)
+            {
+                _incomingStatusText.Text = $"LAN-Suche fehlgeschlagen: {ex.Message}";
+                _incomingStatusText.Foreground = Brush("#FCA5A5");
+            }
+            finally
+            {
+                _discoveryOperationRunning = false;
+                _discoverLanButton.IsEnabled = true;
+            }
+        }
+
         private async void OnStartButtonClick(object? sender, Avalonia.Interactivity.RoutedEventArgs eventArgs)
         {
             if (_startOperationRunning)
@@ -226,11 +273,21 @@ internal static class StreamUiInjector
             {
                 if (_streamService.IsOutgoingRunning)
                 {
+                    await _lanDiscovery.StopAdvertisingAsync();
                     await _streamService.StopOutgoingAsync();
                 }
                 else
                 {
-                    await _streamService.StartOutgoingAsync();
+                    var localUrl = await _streamService.StartOutgoingAsync();
+                    try
+                    {
+                        await _lanDiscovery.StartAdvertisingAsync(localUrl);
+                    }
+                    catch
+                    {
+                        await _streamService.StopOutgoingAsync();
+                        throw;
+                    }
                 }
             }
             catch (Exception ex)
@@ -248,7 +305,7 @@ internal static class StreamUiInjector
 
         private async void OnCopyButtonClick(object? sender, Avalonia.Interactivity.RoutedEventArgs eventArgs)
         {
-            var url = _streamService.OutgoingUrl;
+            var url = DisplayOutgoingUrl();
             if (string.IsNullOrWhiteSpace(url))
                 return;
 
@@ -256,6 +313,9 @@ internal static class StreamUiInjector
             if (clipboard is not null)
                 await clipboard.SetTextAsync(url);
         }
+
+        private string? DisplayOutgoingUrl() =>
+            _lanDiscovery.LanUrl ?? _streamService.OutgoingUrl;
 
         private void OnStreamStatusChanged(object? sender, EventArgs eventArgs)
         {
@@ -276,10 +336,9 @@ internal static class StreamUiInjector
                     ? "#A7F3D0"
                     : "#94A3B8");
 
-            _outgoingAddressBox.Text =
-                _streamService.OutgoingUrl ?? "Noch nicht gestartet";
-            _copyButton.IsEnabled = !string.IsNullOrWhiteSpace(
-                _streamService.OutgoingUrl);
+            var outgoingUrl = DisplayOutgoingUrl();
+            _outgoingAddressBox.Text = outgoingUrl ?? "Noch nicht gestartet";
+            _copyButton.IsEnabled = !string.IsNullOrWhiteSpace(outgoingUrl);
             _startButton.Content = _streamService.IsOutgoingRunning
                 ? "Stop"
                 : "Start";
@@ -292,7 +351,9 @@ internal static class StreamUiInjector
             _incomingAddressBox.TextChanged -= OnIncomingAddressChanged;
             _startButton.Click -= OnStartButtonClick;
             _copyButton.Click -= OnCopyButtonClick;
+            _discoverLanButton.Click -= OnDiscoverLanButtonClick;
             _streamService.StatusChanged -= OnStreamStatusChanged;
+            await _lanDiscovery.DisposeAsync();
             await _streamService.DisposeAsync();
         }
     }
