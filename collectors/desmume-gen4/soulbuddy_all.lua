@@ -18,7 +18,7 @@ gui.register = function(callback)
 end
 
 local loaded, load_error = pcall(function()
-    dofile "soulbuddy_live.lua"
+    dofile "live.lua"
 end)
 
 -- Restore DeSmuME's native API before running anything.
@@ -129,7 +129,6 @@ local function set_range(first_id, last_id, area)
     end
 end
 
--- Routes 1-18 are contiguous in the HGSS zone table.
 for map_id = 9, 26 do
     set_area(map_id, "route_" .. tostring(map_id - 8))
 end
@@ -342,9 +341,6 @@ local function read_current_location()
     local map_address = field_base + HGSS_CURRENT_MAP_OFFSET
     local map_id = safe_read_word(map_address)
 
-    -- On normal HGSS field screens the zone is stored directly here. Some
-    -- transitions temporarily expose a pointer instead; use its +2 field as
-    -- a fallback only when the direct value is implausible/zero.
     if map_id == nil or map_id == 0 or map_id > HGSS_MAX_MAP_ID then
         local map_header = safe_read_dword(map_address)
         if is_main_ram_pointer(map_header) then
@@ -362,9 +358,6 @@ local function read_current_location()
     return map_id, display_area(HGSS_AREA_BY_MAP[map_id], map_id), field_base
 end
 
--- soulbuddy_live.lua owns the player-state serializer. Patch its append_event
--- closure so every state carries a real live HGSS map ID/name, instead of the
--- old diagnostic placeholder.
 local live_emit_state = nil
 local live_poll_callback = nil
 
@@ -395,9 +388,6 @@ if live_emit_state ~= nil then
     end
 end
 
--- The original live-state signature did not include location. Force one state
--- emission whenever the live map ID changes so walking into another route/city
--- updates SoulBuddy even when party and battle data stay identical.
 if live_poll_callback ~= nil and live_emit_state ~= nil then
     local last_live_map_id = nil
     local have_live_map_id = false
@@ -414,8 +404,6 @@ if live_poll_callback ~= nil and live_emit_state ~= nil then
     end)
 end
 
--- Every callback is isolated. A broken overlay can therefore never stop
--- party/box collection or the other SoulBuddy callbacks.
 local callback_is_running = false
 local last_callback_frame = nil
 local callback_driver_reported = false
@@ -467,11 +455,6 @@ native_gui_register(function()
     run_all_soulbuddy_callbacks("gui.register")
 end)
 
--- Some older Windows DeSmuME builds keep a gui.register function alive but do not
--- reliably invoke it after the Lua script has returned. emu.registerafter is a
--- separate frame callback in DeSmuME and has existed for old Lua-enabled builds.
--- Register the same dispatcher there as a compatibility fallback. The frame guard
--- above suppresses the second invocation on builds where both callbacks work.
 if emu ~= nil and type(emu.registerafter) == "function" then
     local success, callback_error = pcall(emu.registerafter, function()
         run_all_soulbuddy_callbacks("emu.registerafter")
