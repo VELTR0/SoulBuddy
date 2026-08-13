@@ -27,7 +27,7 @@ if emu ~= nil and type(emu.registerafter) == "function" then
         local caller = debug.getinfo(2, "S")
         local source = caller and caller.source or ""
         source = string.gsub(source, "\\", "/")
-        if string.sub(source, -17) == "/soulbuddy_all.lua" or
+        if string.sub(source, -18) == "/soulbuddy_all.lua" or
            source == "@soulbuddy_all.lua" then
             print("[Stream] emu.registerafter-GUI-Fallback deaktiviert; Rendering läuft über gui.register.")
             return true
