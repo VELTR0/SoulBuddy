@@ -22,6 +22,7 @@ internal static class IncomingStreamFrameTimeoutGuard
         Path.Combine(RuntimeDirectory, "stream-in.alive"));
 
     private static Timer? _timer;
+    private static string? _activeFramePath;
     private static DateTime _lastWriteUtc = DateTime.MinValue;
     private static DateTime _lastFrameObservedAtUtc = DateTime.MinValue;
     private static long _sequence;
@@ -48,6 +49,7 @@ internal static class IncomingStreamFrameTimeoutGuard
 
         try
         {
+            EnsureCurrentScopedPath();
             var now = DateTime.UtcNow;
             ObserveFrameWrite(now);
             ApplyTimeout(now);
@@ -58,14 +60,32 @@ internal static class IncomingStreamFrameTimeoutGuard
         }
     }
 
+    private static void EnsureCurrentScopedPath()
+    {
+        var framePath = IncomingFramePath;
+        if (string.Equals(_activeFramePath, framePath, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        _activeFramePath = framePath;
+        _lastWriteUtc = DateTime.MinValue;
+        _lastFrameObservedAtUtc = DateTime.MinValue;
+        _sequence = 0;
+
+        // Module initializers run before Program.Main. When LuaLaunchContext later
+        // receives the real launch token, clear stale sidecars for that scoped path.
+        TryDeleteFile(IncomingSequencePath);
+        TryDeleteFile(IncomingAlivePath);
+    }
+
     private static void ObserveFrameWrite(DateTime now)
     {
         try
         {
-            if (!File.Exists(IncomingFramePath))
+            var framePath = IncomingFramePath;
+            if (!File.Exists(framePath))
                 return;
 
-            var writeUtc = File.GetLastWriteTimeUtc(IncomingFramePath);
+            var writeUtc = File.GetLastWriteTimeUtc(framePath);
             if (writeUtc == _lastWriteUtc)
                 return;
 
