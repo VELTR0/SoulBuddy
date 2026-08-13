@@ -111,6 +111,15 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         var overlayEventFilePath = LuaLaunchContext.ScopePath(
             Path.Combine(runtimeDirectory, "overlay-events.jsonl"));
         var databasePath = BuildDatabasePath(configDirectory, config);
+
+        // A SoulLocke run is the persistent source of truth for Pokémon data.
+        // Never reuse encounters cached by a previous SoulBuddy runtime. This also
+        // covers reopening the same saved profile inside an already-running process.
+        // The profile itself (username/link/session choice) lives in SessionStore and
+        // is deliberately unaffected by deleting this Pokémon-only database.
+        if (config.SoullockeEnabled)
+            DeleteSoullockePokemonDatabase(databasePath);
+
         var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         var snapshotPartySource = new JsonPartySource(partyJsonPath);
         var livePartySource = new LivePartySource(
@@ -174,6 +183,29 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             player,
             $"run-{run}",
             "soulbuddy.db");
+    }
+
+    private static void DeleteSoullockePokemonDatabase(string databasePath)
+    {
+        File.Delete(databasePath);
+        File.Delete(databasePath + "-wal");
+        File.Delete(databasePath + "-shm");
+    }
+
+    private static void TryDeleteSoullockePokemonDatabase(string databasePath)
+    {
+        try
+        {
+            DeleteSoullockePokemonDatabase(databasePath);
+        }
+        catch (IOException)
+        {
+            // Best effort during shutdown. The next runtime performs a strict
+            // deletion before reading any Pokémon data, so stale rows are never used.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private static string SanitizePathComponent(string value)
@@ -284,5 +316,8 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
 
         _cancellationSource.Dispose();
         _httpClient.Dispose();
+
+        if (Config.SoullockeEnabled)
+            TryDeleteSoullockePokemonDatabase(DatabasePath);
     }
 }
