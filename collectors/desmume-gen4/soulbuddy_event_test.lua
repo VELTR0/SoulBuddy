@@ -1,1 +1,0 @@
--- Obsolete test script. Removed by the Lua cleanup.
