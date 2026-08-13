@@ -3,63 +3,146 @@ using System.Runtime.CompilerServices;
 namespace SoulBuddy.Services;
 
 /// <summary>
-/// Removes stale incoming stream frames so DeSmuME does not keep rendering the
-/// last partner image after the sender has stopped or disappeared from the network.
+/// Tracks real incoming frame writes for the DeSmuME overlay. The sidecar sequence
+/// changes only when a new frame is written, while the alive marker remains present
+/// for exactly three seconds after the last observed frame. Lua can therefore keep
+/// rendering the last valid frame across atomic file replacement and reconnect gaps
+/// without extending the real no-signal timeout.
 /// </summary>
 internal static class IncomingStreamFrameTimeoutGuard
 {
     private static readonly TimeSpan FrameTimeout = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan CheckInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromMilliseconds(50);
     private static readonly string RuntimeDirectory = FindRuntimeDirectory();
+    private static readonly string IncomingFramePath = LuaLaunchContext.ScopePath(
+        Path.Combine(RuntimeDirectory, "stream-in.gd"));
+    private static readonly string IncomingSequencePath = LuaLaunchContext.ScopePath(
+        Path.Combine(RuntimeDirectory, "stream-in.seq"));
+    private static readonly string IncomingAlivePath = LuaLaunchContext.ScopePath(
+        Path.Combine(RuntimeDirectory, "stream-in.alive"));
+
     private static Timer? _timer;
+    private static DateTime _lastWriteUtc = DateTime.MinValue;
+    private static DateTime _lastFrameObservedAtUtc = DateTime.MinValue;
+    private static long _sequence;
+    private static int _isRunning;
 
     [ModuleInitializer]
     internal static void Initialize()
     {
+        Directory.CreateDirectory(RuntimeDirectory);
+        TryDeleteFile(IncomingSequencePath);
+        TryDeleteFile(IncomingAlivePath);
+
         _timer = new Timer(
-            static _ => RemoveStaleIncomingFrames(),
+            static _ => Tick(),
             null,
-            CheckInterval,
+            TimeSpan.Zero,
             CheckInterval);
     }
 
-    private static void RemoveStaleIncomingFrames()
+    private static void Tick()
+    {
+        if (Interlocked.Exchange(ref _isRunning, 1) != 0)
+            return;
+
+        try
+        {
+            var now = DateTime.UtcNow;
+            ObserveFrameWrite(now);
+            ApplyTimeout(now);
+        }
+        finally
+        {
+            Volatile.Write(ref _isRunning, 0);
+        }
+    }
+
+    private static void ObserveFrameWrite(DateTime now)
     {
         try
         {
-            if (!Directory.Exists(RuntimeDirectory))
+            if (!File.Exists(IncomingFramePath))
                 return;
 
-            var now = DateTime.UtcNow;
-            foreach (var path in Directory.EnumerateFiles(
-                         RuntimeDirectory,
-                         "stream-in*.gd",
-                         SearchOption.TopDirectoryOnly))
-            {
-                try
-                {
-                    var lastWriteUtc = File.GetLastWriteTimeUtc(path);
-                    if (now - lastWriteUtc < FrameTimeout)
-                        continue;
+            var writeUtc = File.GetLastWriteTimeUtc(IncomingFramePath);
+            if (writeUtc == _lastWriteUtc)
+                return;
 
-                    File.Delete(path);
-                }
-                catch (FileNotFoundException)
-                {
-                    // The stream writer replaced/deleted the frame between checks.
-                }
-                catch (IOException)
-                {
-                    // Lua may briefly have the frame open. Retry on the next tick.
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    // Retry later; never let stream cleanup affect SoulBuddy itself.
-                }
-            }
+            _lastWriteUtc = writeUtc;
+            _lastFrameObservedAtUtc = now;
+            _sequence++;
+
+            WriteTextAtomically(IncomingSequencePath, _sequence.ToString());
+            EnsureAliveMarker();
         }
-        catch (DirectoryNotFoundException)
+        catch (FileNotFoundException)
         {
+            // The receiver may be replacing the frame at this exact moment.
+        }
+        catch (IOException)
+        {
+            // A transient file lock is not a lost video signal.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Retry on the next 50 ms tick.
+        }
+    }
+
+    private static void ApplyTimeout(DateTime now)
+    {
+        if (_lastFrameObservedAtUtc == DateTime.MinValue ||
+            now - _lastFrameObservedAtUtc < FrameTimeout)
+        {
+            return;
+        }
+
+        // Removing the marker is the authoritative three-second no-signal event.
+        // The GD file is cleanup only; Lua keeps its own last valid in-memory frame.
+        TryDeleteFile(IncomingAlivePath);
+        TryDeleteFile(IncomingFramePath);
+    }
+
+    private static void EnsureAliveMarker()
+    {
+        try
+        {
+            if (!File.Exists(IncomingAlivePath))
+                File.WriteAllText(IncomingAlivePath, "1");
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void WriteTextAtomically(string path, string value)
+    {
+        var temporaryPath = path + ".tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, value);
+            File.Move(temporaryPath, path, true);
+        }
+        catch (IOException)
+        {
+            TryDeleteFile(temporaryPath);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            TryDeleteFile(temporaryPath);
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
         }
         catch (IOException)
         {
