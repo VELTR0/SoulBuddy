@@ -1,10 +1,10 @@
 using System.Runtime.CompilerServices;
+using System.Xml.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 
@@ -14,8 +14,8 @@ internal static class SessionLinkCopyIconInjector
 {
     private static readonly HashSet<Button> AppliedButtons = [];
     private static DispatcherTimer? _discoveryTimer;
-    private static Bitmap? _copyBitmap;
-    private static bool _copyBitmapResolved;
+    private static Geometry? _copyGeometry;
+    private static bool _copyGeometryResolved;
 
     [ModuleInitializer]
     internal static void Initialize()
@@ -76,23 +76,24 @@ internal static class SessionLinkCopyIconInjector
 
     private static Control CreateCopyIcon()
     {
-        var bitmap = ResolveCopyBitmap();
-        if (bitmap is not null)
+        var geometry = ResolveCopyGeometry();
+        if (geometry is not null)
         {
-            return new Image
+            return new Avalonia.Controls.Shapes.Path
             {
-                Source = bitmap,
+                Data = geometry,
                 Width = 14,
                 Height = 14,
                 Stretch = Stretch.Uniform,
+                Stroke = new SolidColorBrush(Color.Parse("#E2E8F0")),
+                StrokeThickness = 1.5,
+                StrokeLineCap = PenLineCap.Round,
+                StrokeJoin = PenLineJoin.Round,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
         }
 
-        // Keep the button icon-only even when the local image has not yet been
-        // copied into a build output (for example on CI where the private asset
-        // is not present in the repository).
         return new TextBlock
         {
             Text = "⧉",
@@ -103,12 +104,12 @@ internal static class SessionLinkCopyIconInjector
         };
     }
 
-    private static Bitmap? ResolveCopyBitmap()
+    private static Geometry? ResolveCopyGeometry()
     {
-        if (_copyBitmapResolved)
-            return _copyBitmap;
+        if (_copyGeometryResolved)
+            return _copyGeometry;
 
-        _copyBitmapResolved = true;
+        _copyGeometryResolved = true;
 
         foreach (var root in new[]
                  {
@@ -124,20 +125,36 @@ internal static class SessionLinkCopyIconInjector
                     var path = Path.Combine(
                         directory.FullName,
                         resourceDirectory,
-                        "copy.png");
+                        "copy.svg");
                     if (!File.Exists(path))
                         continue;
 
                     try
                     {
-                        using var stream = File.OpenRead(path);
-                        _copyBitmap = new Bitmap(stream);
-                        return _copyBitmap;
+                        var document = XDocument.Load(path);
+                        var pathElement = document
+                            .Descendants()
+                            .FirstOrDefault(element => string.Equals(
+                                element.Name.LocalName,
+                                "path",
+                                StringComparison.OrdinalIgnoreCase));
+                        var pathData = pathElement?.Attribute("d")?.Value;
+                        if (string.IsNullOrWhiteSpace(pathData))
+                            continue;
+
+                        _copyGeometry = Geometry.Parse(pathData);
+                        return _copyGeometry;
                     }
                     catch (IOException)
                     {
                     }
                     catch (UnauthorizedAccessException)
+                    {
+                    }
+                    catch (System.Xml.XmlException)
+                    {
+                    }
+                    catch (FormatException)
                     {
                     }
                 }
