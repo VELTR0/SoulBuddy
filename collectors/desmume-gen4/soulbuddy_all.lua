@@ -416,7 +416,40 @@ end
 
 -- Every callback is isolated. A broken overlay can therefore never stop
 -- party/box collection or the other SoulBuddy callbacks.
-local function run_all_soulbuddy_callbacks()
+local callback_is_running = false
+local last_callback_frame = nil
+local callback_driver_reported = false
+
+local function current_frame_number()
+    if emu == nil or type(emu.framecount) ~= "function" then
+        return nil
+    end
+
+    local success, frame = pcall(emu.framecount)
+    if not success or type(frame) ~= "number" then
+        return nil
+    end
+
+    return frame
+end
+
+local function run_all_soulbuddy_callbacks(driver_name)
+    if callback_is_running then
+        return
+    end
+
+    local frame = current_frame_number()
+    if frame ~= nil and last_callback_frame == frame then
+        return
+    end
+
+    callback_is_running = true
+
+    if not callback_driver_reported then
+        print("[SoulBuddy] Frame-Callbacks aktiv über " .. tostring(driver_name) .. ".")
+        callback_driver_reported = true
+    end
+
     for index, callback in ipairs(registered_callbacks) do
         local success, callback_error = pcall(callback)
         if not success then
@@ -425,9 +458,35 @@ local function run_all_soulbuddy_callbacks()
                 " fehlgeschlagen: " .. tostring(callback_error))
         end
     end
+
+    last_callback_frame = frame
+    callback_is_running = false
 end
 
-native_gui_register(run_all_soulbuddy_callbacks)
+native_gui_register(function()
+    run_all_soulbuddy_callbacks("gui.register")
+end)
+
+-- Some older Windows DeSmuME builds keep a gui.register function alive but do not
+-- reliably invoke it after the Lua script has returned. emu.registerafter is a
+-- separate frame callback in DeSmuME and has existed for old Lua-enabled builds.
+-- Register the same dispatcher there as a compatibility fallback. The frame guard
+-- above suppresses the second invocation on builds where both callbacks work.
+if emu ~= nil and type(emu.registerafter) == "function" then
+    local success, callback_error = pcall(emu.registerafter, function()
+        run_all_soulbuddy_callbacks("emu.registerafter")
+    end)
+
+    if success then
+        print("[SoulBuddy] emu.registerafter-Kompatibilitätsfallback registriert.")
+    else
+        print(
+            "[SoulBuddy] emu.registerafter-Fallback konnte nicht registriert werden: " ..
+            tostring(callback_error))
+    end
+else
+    print("[SoulBuddy] emu.registerafter ist in dieser DeSmuME-Version nicht verfügbar.")
+end
 
 print("[SoulBuddy] Collector, Kampftracking und Overlay sind gemeinsam aktiv.")
 print("[SoulBuddy] HGSS-Kampfstatus nutzt die dedizierte Battle-State-Adresse.")
