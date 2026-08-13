@@ -120,7 +120,7 @@ internal static class LocalizationUiInjector
 
     private static void ApplyContent(ContentControl owner, string current, string propertyKey)
     {
-        if (string.IsNullOrEmpty(current) || IsLanguageFlag(current))
+        if (string.IsNullOrEmpty(current) || IsLanguageFlag(current) || IsPendingSessionCopyButton(owner, current))
             return;
 
         var source = ResolveSource(owner, propertyKey, current);
@@ -133,7 +133,7 @@ internal static class LocalizationUiInjector
 
     private static void ApplyHeader(HeaderedContentControl owner, string current, string propertyKey)
     {
-        if (string.IsNullOrEmpty(current) || IsLanguageMenuHeader(current))
+        if (string.IsNullOrEmpty(current) || IsLanguageMenuHeader(current) || ShouldWaitForStreamInjection(owner, current))
             return;
 
         var source = ResolveSource(owner, propertyKey, current);
@@ -142,6 +142,31 @@ internal static class LocalizationUiInjector
         state.LastApplied = translated;
         if (!string.Equals(current, translated, StringComparison.Ordinal))
             owner.SetCurrentValue(HeaderedContentControl.HeaderProperty, translated);
+    }
+
+    private static bool IsPendingSessionCopyButton(ContentControl owner, string current)
+    {
+        if (owner is not Button || !LocalizationService.IsTranslationOf(current, "Kopieren"))
+            return false;
+
+        return owner.Parent is Grid grid && grid.Children
+            .OfType<TextBlock>()
+            .Any(text => string.Equals(text.Text, "Session Link:", StringComparison.Ordinal));
+    }
+
+    private static bool ShouldWaitForStreamInjection(HeaderedContentControl owner, string current)
+    {
+        if (current is not "Live" and not "Details")
+            return false;
+
+        var window = TopLevel.GetTopLevel(owner) as Window;
+        if (window is null)
+            return false;
+
+        return !window.GetVisualDescendants()
+            .OfType<TabControl>()
+            .SelectMany(tab => tab.Items.OfType<TabItem>())
+            .Any(item => LocalizationService.IsTranslationOf(item.Header?.ToString(), "Stream"));
     }
 
     private static string ResolveSource(AvaloniaObject owner, string propertyKey, string current)
