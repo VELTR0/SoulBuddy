@@ -64,17 +64,32 @@ internal static class SessionLinkCopyIconInjector
             if (copyButton is null || !AppliedButtons.Add(copyButton))
                 continue;
 
-            // The full SoulLocke URL no longer needs to consume space in a read-only
-            // TextBox because the copy button is the only interaction required here.
+            // Keep the SoulLocke URL visible, but replace the read-only TextBox with
+            // normal text now that copying is handled by the dedicated icon button.
             var linkBox = sessionLinkRow.Children
                 .OfType<TextBox>()
                 .FirstOrDefault();
             if (linkBox is not null)
-                sessionLinkRow.Children.Remove(linkBox);
+            {
+                var plainLink = new TextBlock
+                {
+                    Text = linkBox.Text,
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.Parse("#E2E8F0")),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+                ToolTip.SetTip(plainLink, linkBox.Text);
 
-            sessionLinkRow.ColumnDefinitions = new ColumnDefinitions("Auto,Auto");
+                sessionLinkRow.Children.Remove(linkBox);
+                Grid.SetColumn(plainLink, 1);
+                sessionLinkRow.Children.Add(plainLink);
+            }
+
+            sessionLinkRow.ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto");
             sessionLinkRow.ColumnSpacing = 7;
-            Grid.SetColumn(copyButton, 1);
+            Grid.SetColumn(copyButton, 2);
 
             // Session.Name is currently empty for SoulLocke sessions. MainWindow used
             // to add a TextBlock for it anyway, which left an empty line between the
