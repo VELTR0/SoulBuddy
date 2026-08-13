@@ -24,17 +24,12 @@ public sealed class OverlayMessageWriter
         File.WriteAllText(_filePath, string.Empty);
         _speciesNames = LoadSpeciesNames(filePath);
 
-        // The first loaded response for each player is a quiet baseline. Later
-        // partner catches and failed catches are surfaced from SoulLocke snapshots.
         SoullockePartnerCatchObserver.ResetAndSetHandler(WritePartnerCatch);
         SoullockePartnerCatchObserver.SetFailureHandler(WritePartnerCatchFailed);
     }
 
     public void Write(NuzlockeRuleEvent ruleEvent)
     {
-        // Own K.O. and boxing events still exist for state/synchronization purposes,
-        // but they are not useful as local overlay notifications. The linked player
-        // receives the corresponding partner notification through SoulLocke.
         if (ruleEvent.Type is
             NuzlockeRuleEventType.PokemonBoxed or
             NuzlockeRuleEventType.PokemonKnockedOut)
@@ -53,9 +48,8 @@ public sealed class OverlayMessageWriter
             : partnerCatch.Nickname!;
         var location = NormalizePartnerLocation(partnerCatch.Location);
 
-        WriteMessage($"Partner hat {name} gefangen! ({location})");
-        Console.WriteLine(
-            $"SoulLink-Event: Partner hat {name} in {location} gefangen.");
+        WriteMessage(LocalizationService.Overlay("partnerCaught", name, location));
+        Console.WriteLine($"SoulLink-Event: Partner hat {name} in {location} gefangen.");
     }
 
     private void WritePartnerCatchFailed(SoullockePartnerCatchFailedDetected partnerCatch)
@@ -66,9 +60,8 @@ public sealed class OverlayMessageWriter
             : partnerCatch.Nickname!;
         var location = NormalizePartnerLocation(partnerCatch.Location);
 
-        WriteMessage($"Partner konnte {name} nicht fangen! ({location})");
-        Console.WriteLine(
-            $"SoulLink-Event: Partner konnte {name} in {location} nicht fangen.");
+        WriteMessage(LocalizationService.Overlay("partnerCatchFailed", name, location));
+        Console.WriteLine($"SoulLink-Event: Partner konnte {name} in {location} nicht fangen.");
     }
 
     private void WriteMessage(string message)
@@ -84,8 +77,6 @@ public sealed class OverlayMessageWriter
                 _recentMessages.Remove(stale);
             }
 
-            // Suppress an identical notification if the same state is observed more
-            // than once within a short polling window.
             if (_recentMessages.TryGetValue(message, out var previous) &&
                 now - previous <= TimeSpan.FromSeconds(3))
             {
@@ -106,9 +97,12 @@ public sealed class OverlayMessageWriter
 
     private string FormatMessage(NuzlockeRuleEvent ruleEvent)
     {
-        var name = ShortPokemonName(ruleEvent.SpeciesName, ruleEvent.Nickname);
+        var species = ResolveSpeciesName(ruleEvent.SpeciesId, ruleEvent.SpeciesName);
+        var name = string.IsNullOrWhiteSpace(ruleEvent.Nickname)
+            ? species
+            : ruleEvent.Nickname!;
         var location = string.IsNullOrWhiteSpace(ruleEvent.LocationName)
-            ? "Unbekannter Ort"
+            ? LocalizationService.Overlay("unknownLocation")
             : ruleEvent.LocationName.Trim();
 
         return ruleEvent.Type switch
@@ -120,18 +114,18 @@ public sealed class OverlayMessageWriter
                 FormatPartnerBoxed(ruleEvent),
 
             NuzlockeRuleEventType.CatchableEncounter when ruleEvent.IsShiny =>
-                $"Shiny {name} fangbar! ({location})",
+                LocalizationService.Overlay("shinyCatchable", name, location),
 
             NuzlockeRuleEventType.CatchableEncounter =>
-                $"{name} fangbar! ({location})",
+                LocalizationService.Overlay("catchable", name, location),
 
             NuzlockeRuleEventType.CatchSucceeded =>
-                $"{name} gefangen! ({location})",
+                LocalizationService.Overlay("caught", name, location),
 
             NuzlockeRuleEventType.CatchFailed =>
-                $"Fang fehlgeschlagen! ({location})",
+                LocalizationService.Overlay("catchFailed", location),
 
-            _ => $"{name}: Nuzlocke-Event"
+            _ => LocalizationService.Overlay("generic", name)
         };
     }
 
@@ -145,13 +139,13 @@ public sealed class OverlayMessageWriter
         var linkedSpecies = ruleEvent.LinkedSpeciesId is > 0
             ? ResolveSpeciesName(ruleEvent.LinkedSpeciesId.Value, ruleEvent.LinkedSpeciesName)
             : string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
-                ? "verknüpftes Pokémon"
+                ? LocalizationService.Overlay("linkedPokemon")
                 : ruleEvent.LinkedSpeciesName!;
         var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedNickname)
             ? linkedSpecies
             : ruleEvent.LinkedNickname!;
 
-        return $"Partner K.O. - {partnerName} K.O., {linkedName} raus!";
+        return LocalizationService.Overlay("partnerKo", partnerName, linkedName);
     }
 
     private string FormatPartnerBoxed(NuzlockeRuleEvent ruleEvent)
@@ -164,23 +158,21 @@ public sealed class OverlayMessageWriter
         var linkedSpecies = ruleEvent.LinkedSpeciesId is > 0
             ? ResolveSpeciesName(ruleEvent.LinkedSpeciesId.Value, ruleEvent.LinkedSpeciesName)
             : string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
-                ? "verknüpftes Pokémon"
+                ? LocalizationService.Overlay("linkedPokemon")
                 : ruleEvent.LinkedSpeciesName!;
         var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedNickname)
             ? linkedSpecies
             : ruleEvent.LinkedNickname!;
 
-        return $"Partner hat {partnerName} in die Box gelegt! (SoulLink: {linkedName})";
+        return LocalizationService.Overlay("partnerBoxed", partnerName, linkedName);
     }
 
     private string ResolveSpeciesName(int speciesId, string? fallback)
     {
-        if (_speciesNames.TryGetValue(speciesId, out var resolved))
-            return resolved;
-
-        return string.IsNullOrWhiteSpace(fallback)
-            ? $"Pokémon #{speciesId}"
-            : fallback!;
+        var sourceName = _speciesNames.TryGetValue(speciesId, out var resolved)
+            ? resolved
+            : fallback;
+        return LocalizationService.PokemonName(speciesId, sourceName);
     }
 
     private static string NormalizePartnerLocation(string? location)
@@ -190,13 +182,10 @@ public sealed class OverlayMessageWriter
         {
             "Finsterhöhle" or "Dark Cave" or "Placeholder 1" => "Dunkelhöhle",
             "Sprout Tower" or "Placeholder 2" => "Knofensaturm",
-            "" => "Unbekannter Ort",
+            "" => LocalizationService.Overlay("unknownLocation"),
             _ => value
         };
     }
-
-    private static string ShortPokemonName(string species, string? nickname) =>
-        string.IsNullOrWhiteSpace(nickname) ? species : nickname!;
 
     private static IReadOnlyDictionary<int, string> LoadSpeciesNames(string overlayFilePath)
     {
