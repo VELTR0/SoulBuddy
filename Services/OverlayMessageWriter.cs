@@ -25,18 +25,22 @@ public sealed class OverlayMessageWriter
         _speciesNames = LoadSpeciesNames(filePath);
 
         // The first loaded response for each player is a quiet baseline. Later
-        // partner additions and explicit box-status transitions are surfaced.
+        // partner catches and failed catches are surfaced from SoulLocke snapshots.
         SoullockePartnerCatchObserver.ResetAndSetHandler(WritePartnerCatch);
-        SoullockePartnerCatchObserver.SetBoxHandler(WritePartnerBox);
+        SoullockePartnerCatchObserver.SetFailureHandler(WritePartnerCatchFailed);
     }
 
     public void Write(NuzlockeRuleEvent ruleEvent)
     {
-        // Boxing your own Pokémon is still a rule event because SyncService needs it
-        // to persist the local Soullocke status as "boxed". Only the local overlay is
-        // suppressed; the partner still receives the remote boxing notification.
-        if (ruleEvent.Type == NuzlockeRuleEventType.PokemonBoxed)
+        // Own K.O. and boxing events still exist for state/synchronization purposes,
+        // but they are not useful as local overlay notifications. The linked player
+        // receives the corresponding partner notification through SoulLocke.
+        if (ruleEvent.Type is
+            NuzlockeRuleEventType.PokemonBoxed or
+            NuzlockeRuleEventType.PokemonKnockedOut)
+        {
             return;
+        }
 
         WriteMessage(FormatMessage(ruleEvent));
     }
@@ -47,30 +51,24 @@ public sealed class OverlayMessageWriter
         var name = string.IsNullOrWhiteSpace(partnerCatch.Nickname)
             ? species
             : partnerCatch.Nickname!;
+        var location = NormalizePartnerLocation(partnerCatch.Location);
 
-        WriteMessage($"Partner hat {name} gefangen!");
+        WriteMessage($"Partner hat {name} gefangen! ({location})");
         Console.WriteLine(
-            $"SoulLink-Event: Partner hat {name} in {partnerCatch.Location} gefangen.");
+            $"SoulLink-Event: Partner hat {name} in {location} gefangen.");
     }
 
-    private void WritePartnerBox(SoullockePartnerBoxDetected partnerBox)
+    private void WritePartnerCatchFailed(SoullockePartnerCatchFailedDetected partnerCatch)
     {
-        var partnerSpecies = ResolveSpeciesName(partnerBox.Pokemon, null);
-        var partnerName = string.IsNullOrWhiteSpace(partnerBox.Nickname)
-            ? partnerSpecies
-            : partnerBox.Nickname!;
+        var species = ResolveSpeciesName(partnerCatch.Pokemon, null);
+        var name = string.IsNullOrWhiteSpace(partnerCatch.Nickname)
+            ? species
+            : partnerCatch.Nickname!;
+        var location = NormalizePartnerLocation(partnerCatch.Location);
 
-        var linkedSpecies = partnerBox.LinkedPokemon is > 0
-            ? ResolveSpeciesName(partnerBox.LinkedPokemon.Value, null)
-            : "verknüpftes Pokémon";
-        var linkedName = string.IsNullOrWhiteSpace(partnerBox.LinkedNickname)
-            ? linkedSpecies
-            : partnerBox.LinkedNickname!;
-
-        WriteMessage($"{partnerName} boxed! (Linked: {linkedName})");
+        WriteMessage($"Partner konnte {name} nicht fangen! ({location})");
         Console.WriteLine(
-            $"SoulLink-Event: {partnerName} wurde in {partnerBox.Location} eingeboxt; " +
-            $"verknüpft mit {linkedName}.");
+            $"SoulLink-Event: Partner konnte {name} in {location} nicht fangen.");
     }
 
     private void WriteMessage(string message)
@@ -86,8 +84,8 @@ public sealed class OverlayMessageWriter
                 _recentMessages.Remove(stale);
             }
 
-            // Partner boxing is also represented as a normal rule event in older
-            // code paths. Suppress an identical message if both observers see it.
+            // Suppress an identical notification if the same state is observed more
+            // than once within a short polling window.
             if (_recentMessages.TryGetValue(message, out var previous) &&
                 now - previous <= TimeSpan.FromSeconds(3))
             {
@@ -115,9 +113,6 @@ public sealed class OverlayMessageWriter
 
         return ruleEvent.Type switch
         {
-            NuzlockeRuleEventType.PokemonKnockedOut =>
-                $"{name} ist K.O.!",
-
             NuzlockeRuleEventType.PartnerPokemonKnockedOut =>
                 FormatPartnerKnockout(ruleEvent),
 
@@ -140,13 +135,23 @@ public sealed class OverlayMessageWriter
         };
     }
 
-    private static string FormatPartnerKnockout(NuzlockeRuleEvent ruleEvent)
+    private string FormatPartnerKnockout(NuzlockeRuleEvent ruleEvent)
     {
-        var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
-            ? "Pokemon"
-            : ShortPokemonName(ruleEvent.LinkedSpeciesName, ruleEvent.LinkedNickname);
+        var partnerSpecies = ResolveSpeciesName(ruleEvent.SpeciesId, ruleEvent.SpeciesName);
+        var partnerName = string.IsNullOrWhiteSpace(ruleEvent.Nickname)
+            ? partnerSpecies
+            : ruleEvent.Nickname!;
 
-        return $"Partner K.O. - {linkedName} raus!";
+        var linkedSpecies = ruleEvent.LinkedSpeciesId is > 0
+            ? ResolveSpeciesName(ruleEvent.LinkedSpeciesId.Value, ruleEvent.LinkedSpeciesName)
+            : string.IsNullOrWhiteSpace(ruleEvent.LinkedSpeciesName)
+                ? "verknüpftes Pokémon"
+                : ruleEvent.LinkedSpeciesName!;
+        var linkedName = string.IsNullOrWhiteSpace(ruleEvent.LinkedNickname)
+            ? linkedSpecies
+            : ruleEvent.LinkedNickname!;
+
+        return $"Partner K.O. - {partnerName} K.O., {linkedName} raus!";
     }
 
     private string FormatPartnerBoxed(NuzlockeRuleEvent ruleEvent)
@@ -165,7 +170,7 @@ public sealed class OverlayMessageWriter
             ? linkedSpecies
             : ruleEvent.LinkedNickname!;
 
-        return $"{partnerName} boxed! (Linked:{linkedName})";
+        return $"Partner hat {partnerName} in die Box gelegt! (SoulLink: {linkedName})";
     }
 
     private string ResolveSpeciesName(int speciesId, string? fallback)
@@ -176,6 +181,17 @@ public sealed class OverlayMessageWriter
         return string.IsNullOrWhiteSpace(fallback)
             ? $"Pokémon #{speciesId}"
             : fallback!;
+    }
+
+    private static string NormalizePartnerLocation(string? location)
+    {
+        var value = (location ?? string.Empty).Trim();
+        return value switch
+        {
+            "Finsterhöhle" or "Dark Cave" or "Placeholder 1" => "Dunkelhöhle",
+            "Sprout Tower" or "Placeholder 2" or "" => "Knofensaturm",
+            _ => value
+        };
     }
 
     private static string ShortPokemonName(string species, string? nickname) =>
