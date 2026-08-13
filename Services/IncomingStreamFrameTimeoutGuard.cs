@@ -99,9 +99,9 @@ internal static class IncomingStreamFrameTimeoutGuard
         }
 
         // Removing the marker is the authoritative three-second no-signal event.
-        // The GD file is cleanup only; Lua keeps its own last valid in-memory frame.
+        // Keep the last GD file on disk: Lua owns the visual cache, and a reconnect
+        // must never race a timeout cleanup that deletes a newly arrived frame.
         TryDeleteFile(IncomingAlivePath);
-        TryDeleteFile(IncomingFramePath);
     }
 
     private static void EnsureAliveMarker()
