@@ -1,7 +1,7 @@
 -- SoulBuddy local video bridge for DeSmuME.
--- The upper DS screen is captured as DeSmuME's native GD string and written to a
--- per-Lua-instance runtime file. SoulBuddy serves a downsized version locally.
--- Incoming frames are rendered as a 64x48 picture-in-picture on the upper screen.
+-- The upper DS screen is captured in DeSmuME's native GD format and transported
+-- at native resolution. Only the incoming DeSmuME picture-in-picture is reduced
+-- to 64x48 by SoulBuddy before it reaches this renderer.
 
 if gui == nil then
     return false
@@ -102,8 +102,6 @@ local function write_binary_atomic(path, data)
         return true
     end
 
-    -- Some Lua/CRT combinations can reject rename replacement. Fall back to a
-    -- direct write so streaming still works for the local test.
     local fallback = io.open(path, "wb")
     if fallback == nil then
         pcall(os.remove, temporary_path)
@@ -137,8 +135,6 @@ local function capture_upper_screen(frame)
         return
     end
 
-    -- A savestate/movie reset can move DeSmuME's frame counter backwards. Without
-    -- this reset the old subtraction check could suppress capture indefinitely.
     if frame < last_capture_frame then
         last_capture_frame = frame - capture_frame_interval
     end
@@ -166,10 +162,6 @@ local function capture_upper_screen(frame)
     end
 
     if write_binary_atomic(outgoing_frame_path, data) then
-        -- Do not infer freshness from file-system timestamps. Explicitly publish a
-        -- monotonically increasing capture sequence only after the complete frame
-        -- has been committed. SoulBuddy can therefore never mistake a fresh frame
-        -- for an old one because of timestamp caching/resolution.
         capture_sequence = capture_sequence + 1
         write_text_atomic(outgoing_sequence_path, capture_sequence)
         capture_failure_count = 0
@@ -217,7 +209,7 @@ local function draw_incoming_frame()
     end
 
     -- The upper DS screen occupies y=-192..-1 in DeSmuME's Lua GUI coordinate
-    -- system. SoulBuddy sends incoming frames as 64x48. x=192/y=-192 keeps the
+    -- system. The overlay bridge receives 64x48 frames. x=192/y=-192 keeps the
     -- preview anchored in the upper-right corner of the top screen.
     pcall(gui.gdoverlay, 192, -192, incoming_frame_cache)
 end
@@ -238,5 +230,5 @@ else
     return false
 end
 
-print("[SoulBuddy Stream] Lokale Video-Bridge bereit (10 FPS Capture, 64x48 Stream/Overlay).")
+print("[SoulBuddy Stream] Video-Bridge bereit (10 FPS, nativer 256x192-Stream, 64x48 Overlay).")
 return true
