@@ -50,30 +50,46 @@ internal static class VisualRootCompatibility
                 .OfType<TextBlock>()
                 .FirstOrDefault(text =>
                     LocalizationService.IsTranslationOf(text.Text, "Encounters"));
-            if (heading?.Parent is not Grid sectionGrid)
+            if (heading?.Parent is not Grid headerGrid)
+                continue;
+
+            var sectionGrid = headerGrid.GetVisualAncestors()
+                .OfType<Grid>()
+                .FirstOrDefault(grid => grid.Children.OfType<ScrollViewer>().Any());
+            if (sectionGrid is null)
                 continue;
 
             var scroll = sectionGrid.Children.OfType<ScrollViewer>().FirstOrDefault();
-            if (scroll is null || IsolatedEncounterScrollers.TryGetValue(scroll, out _))
+            if (scroll?.Content is not StackPanel visiblePanel)
                 continue;
 
-            if (scroll.Content is not StackPanel legacyPanel)
-                continue;
-
-            scroll.Content = new StackPanel
+            if (!IsolatedEncounterScrollers.TryGetValue(scroll, out _))
             {
-                Spacing = legacyPanel.Spacing,
-                Margin = legacyPanel.Margin,
-                HorizontalAlignment = legacyPanel.HorizontalAlignment,
-                VerticalAlignment = legacyPanel.VerticalAlignment
-            };
+                var legacyPanel = visiblePanel;
+                visiblePanel = new StackPanel
+                {
+                    Spacing = legacyPanel.Spacing,
+                    Margin = legacyPanel.Margin,
+                    HorizontalAlignment = legacyPanel.HorizontalAlignment,
+                    VerticalAlignment = legacyPanel.VerticalAlignment
+                };
 
-            IsolatedEncounterScrollers.Add(scroll, new object());
-            ForceSoulLinkEncounterRefresh(window);
+                scroll.Content = visiblePanel;
+                IsolatedEncounterScrollers.Add(scroll, new object());
+            }
+
+            var count = headerGrid.Children
+                .OfType<TextBlock>()
+                .FirstOrDefault(text => !ReferenceEquals(text, heading));
+
+            BindSoulLinkEncounterState(window, visiblePanel, count);
         }
     }
 
-    private static void ForceSoulLinkEncounterRefresh(Window window)
+    private static void BindSoulLinkEncounterState(
+        Window window,
+        StackPanel visiblePanel,
+        TextBlock? count)
     {
         var statesField = typeof(MainWindowSoulLinkUi).GetField(
             "States",
@@ -82,7 +98,31 @@ internal static class VisualRootCompatibility
             return;
 
         var state = states[window];
-        state?.GetType().GetMethod(
+        if (state is null)
+            return;
+
+        var stateType = state.GetType();
+        var panelField = stateType.GetField(
+            "_encounterPanel",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var countField = stateType.GetField(
+            "_encounterCount",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
+        var panelChanged = panelField is not null &&
+                           !ReferenceEquals(panelField.GetValue(state), visiblePanel);
+        var countChanged = countField is not null &&
+                           !ReferenceEquals(countField.GetValue(state), count);
+
+        if (panelField is not null)
+            panelField.SetValue(state, visiblePanel);
+        if (countField is not null)
+            countField.SetValue(state, count);
+
+        if (!panelChanged && !countChanged)
+            return;
+
+        stateType.GetMethod(
                 "ForceRefresh",
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?
             .Invoke(state, null);
