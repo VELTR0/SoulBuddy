@@ -83,9 +83,7 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
 
         if (File.Exists(localConfigPath))
         {
-            var localConfigJson = await File.ReadAllTextAsync(
-                localConfigPath,
-                cancellationToken);
+            var localConfigJson = await File.ReadAllTextAsync(localConfigPath, cancellationToken);
             config = JsonSerializer.Deserialize<AppConfig>(localConfigJson, jsonOptions)
                 ?? throw new InvalidOperationException("appsettings.local.json ist ungültig.");
         }
@@ -111,15 +109,6 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         var overlayEventFilePath = LuaLaunchContext.ScopePath(
             Path.Combine(runtimeDirectory, "overlay-events.jsonl"));
         var databasePath = BuildDatabasePath(configDirectory, config);
-
-        // A SoulLocke run is the persistent source of truth for Pokémon data.
-        // Never reuse encounters cached by a previous SoulBuddy runtime. This also
-        // covers reopening the same saved profile inside an already-running process.
-        // The profile itself (username/link/session choice) lives in SessionStore and
-        // is deliberately unaffected by deleting this Pokémon-only database.
-        if (config.SoullockeEnabled)
-            DeleteSoullockePokemonDatabase(databasePath);
-
         var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         var snapshotPartySource = new JsonPartySource(partyJsonPath);
         var livePartySource = new LivePartySource(
@@ -148,7 +137,10 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             playerLiveStateSource,
             nuzlockeRuleEventSource);
 
-        var runtime = new SoulBuddyRuntime(
+        // Do not initialize SoulLocke here. The collector must be able to start even
+        // while the server is unavailable or still connecting. SyncService performs
+        // its own initialization in the background after Start().
+        return new SoulBuddyRuntime(
             config,
             configDirectory,
             partyJsonPath,
@@ -161,9 +153,6 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             knownPokemonStore,
             syncService,
             collectorEventSource);
-
-        await runtime.SyncService.InitializeAsync(cancellationToken);
-        return runtime;
     }
 
     private static string BuildDatabasePath(string configDirectory, AppConfig config)
@@ -171,40 +160,44 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         if (!config.SoullockeEnabled || string.IsNullOrWhiteSpace(config.SessionId))
             return Path.Combine(configDirectory, "soulbuddy.db");
 
+        // SoulLocke is the persistent source of truth. Each SoulBuddy runtime gets a
+        // unique temporary Pokémon database so no encounter/team state can leak from
+        // a previous launch and overlapping runtime shutdown/startup cannot lock the
+        // next session out of its database.
         var session = SanitizePathComponent(config.SessionId);
         var player = SanitizePathComponent(config.PlayerName);
         var run = Math.Max(1, config.RunNumber);
+        var runtimeId = $"{Environment.ProcessId}-{Guid.NewGuid():N}";
 
         return Path.Combine(
-            configDirectory,
-            "data",
-            "sessions",
+            Path.GetTempPath(),
+            "SoulBuddy",
+            "pokemon",
             session,
             player,
             $"run-{run}",
-            "soulbuddy.db");
-    }
-
-    private static void DeleteSoullockePokemonDatabase(string databasePath)
-    {
-        File.Delete(databasePath);
-        File.Delete(databasePath + "-wal");
-        File.Delete(databasePath + "-shm");
+            $"runtime-{runtimeId}.db");
     }
 
     private static void TryDeleteSoullockePokemonDatabase(string databasePath)
     {
-        try
+        foreach (var path in new[]
+                 {
+                     databasePath,
+                     databasePath + "-wal",
+                     databasePath + "-shm"
+                 })
         {
-            DeleteSoullockePokemonDatabase(databasePath);
-        }
-        catch (IOException)
-        {
-            // Best effort during shutdown. The next runtime performs a strict
-            // deletion before reading any Pokémon data, so stale rows are never used.
-        }
-        catch (UnauthorizedAccessException)
-        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
     }
 
