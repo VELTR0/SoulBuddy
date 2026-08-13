@@ -12,6 +12,7 @@ namespace SoulBuddy;
 public sealed class App : Application
 {
     private SoulBuddyRuntime? _headlessRuntime;
+    private HeadlessStreamCoordinator? _headlessStreamCoordinator;
     private CancellationTokenSource? _headlessLuaStopWatchCancellation;
     private Task? _headlessLuaStopWatchTask;
     private string? _headlessLuaLaunchToken;
@@ -44,6 +45,23 @@ public sealed class App : Application
 
         _headlessRuntime = await SoulBuddyRuntime.CreateAsync();
         _headlessRuntime.Start();
+
+        if (HeadlessStreamLaunchSettings.Enabled)
+        {
+            var coordinator = new HeadlessStreamCoordinator();
+            try
+            {
+                await coordinator.StartAsync();
+                _headlessStreamCoordinator = coordinator;
+            }
+            catch
+            {
+                await coordinator.DisposeAsync();
+                await _headlessRuntime.DisposeAsync();
+                _headlessRuntime = null;
+                throw;
+            }
+        }
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -81,6 +99,12 @@ public sealed class App : Application
         var setupWindow = new SessionSetupWindow();
         desktop.MainWindow = setupWindow;
         setupWindow.Show();
+
+        if (_headlessStreamCoordinator is not null)
+        {
+            await _headlessStreamCoordinator.DisposeAsync();
+            _headlessStreamCoordinator = null;
+        }
 
         if (_headlessRuntime is not null)
         {
@@ -187,12 +211,22 @@ public sealed class App : Application
 
         CancelHeadlessLuaStopWatch();
 
+        var streamCoordinator = _headlessStreamCoordinator;
+        _headlessStreamCoordinator = null;
         var runtime = _headlessRuntime;
         _headlessRuntime = null;
 
         try
         {
-            await runtime.DisposeAsync();
+            try
+            {
+                if (streamCoordinator is not null)
+                    await streamCoordinator.DisposeAsync();
+            }
+            finally
+            {
+                await runtime.DisposeAsync();
+            }
         }
         finally
         {
@@ -272,6 +306,21 @@ public sealed class App : Application
     private void OnDesktopExit(object? sender, ControlledApplicationLifetimeExitEventArgs eventArgs)
     {
         CancelHeadlessLuaStopWatch();
+
+        if (_headlessStreamCoordinator is not null)
+        {
+            try
+            {
+                _headlessStreamCoordinator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            }
+            catch
+            {
+            }
+            finally
+            {
+                _headlessStreamCoordinator = null;
+            }
+        }
 
         if (_headlessRuntime is null)
             return;
