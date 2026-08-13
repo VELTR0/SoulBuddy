@@ -36,15 +36,6 @@ if emu ~= nil and type(emu.registerafter) == "function" then
     end
 end
 
--- Smooth the tiny no-file window that can occur while the receiver atomically
--- replaces an incoming video frame. Failure is non-fatal; streaming can still run.
-local guard_ok, guard_result = pcall(function()
-    return dofile "stream_file_guard.lua"
-end)
-if not guard_ok then
-    print("[Stream] Frame-Datei-Guard konnte nicht geladen werden: " .. tostring(guard_result))
-end
-
 -- Video is optional. A failure here must never prevent the normal collector,
 -- SoulLink sync or rule-event overlay from starting.
 local stream_ok, stream_result = pcall(function()
