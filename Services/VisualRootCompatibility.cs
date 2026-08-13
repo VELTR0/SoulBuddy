@@ -1,3 +1,5 @@
+using System.Collections;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
@@ -67,6 +69,22 @@ internal static class VisualRootCompatibility
             };
 
             IsolatedEncounterScrollers.Add(scroll, new object());
+            ForceSoulLinkEncounterRefresh(window);
         }
+    }
+
+    private static void ForceSoulLinkEncounterRefresh(Window window)
+    {
+        var statesField = typeof(MainWindowSoulLinkUi).GetField(
+            "States",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        if (statesField?.GetValue(null) is not IDictionary states || !states.Contains(window))
+            return;
+
+        var state = states[window];
+        state?.GetType().GetMethod(
+                "ForceRefresh",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?
+            .Invoke(state, null);
     }
 }
