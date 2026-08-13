@@ -25,17 +25,53 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
     private int _sourcePort;
     private int _proxyPort;
 
-    // The video receiver connects to this stable loopback proxy instead of directly
-    // to the partner's LAN proxy. When the partner restarts and gets a new port, the
-    // next connection through this resolver performs discovery again automatically.
     private TcpListener? _partnerResolverListener;
     private CancellationTokenSource? _partnerResolverCancellation;
     private Task? _partnerResolverTask;
     private int _partnerResolverPort;
     private string? _lastPartnerUrl;
+    private string? _lastPartnerInstanceId;
+    private string _localActivityTitle = "LIVE-STATUS";
+    private string _localActivityText = "Warte auf Live-Daten aus dem Emulator …";
 
     public string? LanUrl { get; private set; }
     public bool IsAdvertising => _proxyListener is not null;
+
+    public void SetLocalActivity(string? title, string? text)
+    {
+        lock (_partnerGate)
+        {
+            _localActivityTitle = string.IsNullOrWhiteSpace(title) ? "LIVE-STATUS" : title;
+            _localActivityText = string.IsNullOrWhiteSpace(text)
+                ? "Warte auf Live-Daten aus dem Emulator …"
+                : text;
+        }
+    }
+
+    public async Task<(string Title, string Text)?> QueryPartnerActivityAsync(
+        CancellationToken cancellationToken = default)
+    {
+        string? partnerInstanceId;
+        lock (_partnerGate)
+            partnerInstanceId = _lastPartnerInstanceId;
+
+        if (string.IsNullOrWhiteSpace(partnerInstanceId))
+            return null;
+
+        var partner = await DiscoverRemoteAsync(
+            cancellationToken,
+            requiredInstanceId: partnerInstanceId);
+        if (partner is null)
+            return null;
+
+        lock (_partnerGate)
+        {
+            _lastPartnerUrl = partner.Url;
+            _lastPartnerInstanceId = partner.InstanceId;
+        }
+
+        return (partner.ActivityTitle, partner.ActivityText);
+    }
 
     public async Task StartAdvertisingAsync(
         string localStreamUrl,
@@ -113,19 +149,23 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
     public async Task<string?> DiscoverAsync(
         CancellationToken cancellationToken = default)
     {
-        var remoteUrl = await DiscoverRemoteAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(remoteUrl))
+        var remote = await DiscoverRemoteAsync(cancellationToken);
+        if (remote is null)
             return null;
 
         lock (_partnerGate)
-            _lastPartnerUrl = remoteUrl;
+        {
+            _lastPartnerUrl = remote.Url;
+            _lastPartnerInstanceId = remote.InstanceId;
+        }
 
         EnsurePartnerResolverStarted();
         return $"http://127.0.0.1:{_partnerResolverPort}/stream";
     }
 
-    private async Task<string?> DiscoverRemoteAsync(
-        CancellationToken cancellationToken)
+    private async Task<DiscoveredPartner?> DiscoverRemoteAsync(
+        CancellationToken cancellationToken,
+        string? requiredInstanceId = null)
     {
         using var client = new UdpClient(AddressFamily.InterNetwork);
         client.Client.Bind(new IPEndPoint(IPAddress.Any, 0));
@@ -157,10 +197,12 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
 
             var text = Encoding.UTF8.GetString(response.Buffer);
             var parts = text.Split('|');
-            if (parts.Length != 4 ||
+            if (parts.Length < 4 ||
                 !string.Equals(parts[0], OfferPrefix, StringComparison.Ordinal) ||
                 !string.Equals(parts[1], requestId, StringComparison.Ordinal) ||
                 string.Equals(parts[2], _instanceId, StringComparison.Ordinal) ||
+                (!string.IsNullOrWhiteSpace(requiredInstanceId) &&
+                 !string.Equals(parts[2], requiredInstanceId, StringComparison.Ordinal)) ||
                 !int.TryParse(parts[3], out var port) ||
                 port is <= 0 or > 65535)
             {
@@ -171,7 +213,11 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
             if (address.AddressFamily != AddressFamily.InterNetwork)
                 continue;
 
-            return $"http://{address}:{port}/stream";
+            return new DiscoveredPartner(
+                $"http://{address}:{port}/stream",
+                parts[2],
+                parts.Length >= 5 ? DecodeActivity(parts[4]) : string.Empty,
+                parts.Length >= 6 ? DecodeActivity(parts[5]) : string.Empty);
         }
 
         return null;
@@ -232,28 +278,29 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
             {
                 localViewer.NoDelay = true;
 
-                // First try the last endpoint. If the partner restarted, that port may
-                // be gone; discard it and discover the current advertised endpoint.
                 var remoteUrl = GetLastPartnerUrl();
                 if (!await TryProxyToPartnerAsync(
                         localViewer,
                         remoteUrl,
                         cancellationToken))
                 {
-                    ClearLastPartnerUrl(remoteUrl);
-                    remoteUrl = await DiscoverRemoteAsync(cancellationToken);
-                    if (string.IsNullOrWhiteSpace(remoteUrl))
+                    ClearLastPartner(remoteUrl);
+                    var remote = await DiscoverRemoteAsync(cancellationToken);
+                    if (remote is null)
                         return;
 
                     lock (_partnerGate)
-                        _lastPartnerUrl = remoteUrl;
+                    {
+                        _lastPartnerUrl = remote.Url;
+                        _lastPartnerInstanceId = remote.InstanceId;
+                    }
 
                     if (!await TryProxyToPartnerAsync(
                             localViewer,
-                            remoteUrl,
+                            remote.Url,
                             cancellationToken))
                     {
-                        ClearLastPartnerUrl(remoteUrl);
+                        ClearLastPartner(remote.Url);
                     }
                 }
             }
@@ -337,12 +384,15 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
             return _lastPartnerUrl;
     }
 
-    private void ClearLastPartnerUrl(string? expectedUrl)
+    private void ClearLastPartner(string? expectedUrl)
     {
         lock (_partnerGate)
         {
-            if (string.Equals(_lastPartnerUrl, expectedUrl, StringComparison.Ordinal))
-                _lastPartnerUrl = null;
+            if (!string.Equals(_lastPartnerUrl, expectedUrl, StringComparison.Ordinal))
+                return;
+
+            _lastPartnerUrl = null;
+            _lastPartnerInstanceId = null;
         }
     }
 
@@ -357,7 +407,10 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
         _partnerResolverListener = null;
         _partnerResolverPort = 0;
         lock (_partnerGate)
+        {
             _lastPartnerUrl = null;
+            _lastPartnerInstanceId = null;
+        }
 
         cancellation?.Cancel();
         listener?.Stop();
@@ -407,8 +460,17 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
                     continue;
                 }
 
+                string activityTitle;
+                string activityText;
+                lock (_partnerGate)
+                {
+                    activityTitle = _localActivityTitle;
+                    activityText = _localActivityText;
+                }
+
                 var response = Encoding.UTF8.GetBytes(
-                    $"{OfferPrefix}|{parts[1]}|{_instanceId}|{_proxyPort}");
+                    $"{OfferPrefix}|{parts[1]}|{_instanceId}|{_proxyPort}|" +
+                    $"{EncodeActivity(activityTitle)}|{EncodeActivity(activityText)}");
                 await client.SendAsync(
                     response,
                     response.Length,
@@ -516,6 +578,21 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
         }
     }
 
+    private static string EncodeActivity(string value) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+
+    private static string DecodeActivity(string value)
+    {
+        try
+        {
+            return Encoding.UTF8.GetString(Convert.FromBase64String(value));
+        }
+        catch (FormatException)
+        {
+            return string.Empty;
+        }
+    }
+
     private static string GetPreferredLanAddress()
     {
         try
@@ -591,4 +668,10 @@ internal sealed class LanStreamDiscoveryService : IAsyncDisposable
     {
         await StopAdvertisingAsync();
     }
+
+    private sealed record DiscoveredPartner(
+        string Url,
+        string InstanceId,
+        string ActivityTitle,
+        string ActivityText);
 }
