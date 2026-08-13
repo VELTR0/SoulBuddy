@@ -198,7 +198,6 @@ public sealed class KnownPokemonStore
         while (await reader.ReadAsync(cancellationToken))
         {
             var entry = ReadEntry(reader);
-            entry.Location = $"{entry.Location} · {StatusDisplay(entry.EncounterStatus)}";
             entry.SoullockeSynced = false;
             result.Add(entry);
         }
