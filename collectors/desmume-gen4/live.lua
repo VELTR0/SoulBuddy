@@ -1,3 +1,5 @@
+require("render_frame_clock").install()
+
 local native_dofile = dofile
 local legacy_snapshot_name = "write_soul" .. "buddy_snapshot.lua"
 
