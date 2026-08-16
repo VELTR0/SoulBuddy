@@ -1,14 +1,12 @@
-using System.Net.Http.Headers;
 using SoulBuddy.Models;
 
 namespace SoulBuddy.Services;
 
 /// <summary>
 /// Provider boundary for soullocke.vercel.app. The upstream tracker uses Firebase
-/// Realtime Database and PokeAPI-style English location names. This wrapper keeps
-/// partner reads explicitly non-cached and converts those location names to the
-/// canonical names SoulBuddy already uses for its Gen-4 collector so links can be
-/// refreshed while SoulBuddy is running.
+/// Realtime Database and PokeAPI-style English location names. This wrapper converts
+/// those location names to the canonical names SoulBuddy already uses for its Gen-4
+/// collector so partner links can be refreshed while SoulBuddy is running.
 /// </summary>
 public sealed class VercelTrackerClient : ITrackerClient
 {
@@ -16,21 +14,10 @@ public sealed class VercelTrackerClient : ITrackerClient
 
     public VercelTrackerClient(HttpClient httpClient, AppConfig config)
     {
-        // The website itself subscribes to Firebase's realtime value events. SoulBuddy
-        // polls instead, so every poll must reach Firebase rather than reusing a stale
-        // intermediary response from the initial run load.
-        httpClient.DefaultRequestHeaders.CacheControl = new CacheControlHeaderValue
-        {
-            NoCache = true,
-            NoStore = true,
-            MaxAge = TimeSpan.Zero
-        };
-        if (!httpClient.DefaultRequestHeaders.Pragma.Any(value =>
-                string.Equals(value.Name, "no-cache", StringComparison.OrdinalIgnoreCase)))
-        {
-            httpClient.DefaultRequestHeaders.Pragma.Add(new NameValueHeaderValue("no-cache"));
-        }
-
+        // Do not mutate DefaultRequestHeaders on the shared HttpClient here. The
+        // underlying Firebase client already performs a fresh GET for every partner
+        // poll, and global cache directives can interfere with other requests that use
+        // the same client instance.
         _inner = new VercelSoullockeClient(httpClient, config);
     }
 
