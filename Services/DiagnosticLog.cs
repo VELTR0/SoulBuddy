@@ -28,7 +28,7 @@ internal static class DiagnosticLog
         Write(
             "ERROR",
             category,
-            $"{message} | {exception.GetType().Name}: {exception.Message}{Environment.NewLine}{exception.StackTrace}");
+            $"{message}{Environment.NewLine}{exception}");
 
     private static void Write(string level, string category, string message)
     {
