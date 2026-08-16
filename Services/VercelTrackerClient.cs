@@ -4,18 +4,23 @@ namespace SoulBuddy.Services;
 
 /// <summary>
 /// Provider boundary for soullocke.vercel.app. The upstream tracker uses Firebase
-/// Realtime Database and PokeAPI-style English location names. This wrapper converts
-/// partner location names to the canonical names SoulBuddy already uses for its Gen-4
-/// collector while leaving the writable local run untouched.
+/// Realtime Database and PokeAPI-style English location names. This wrapper resolves
+/// the database URL used by the deployed website and converts partner location names
+/// to SoulBuddy's canonical Gen-4 names while leaving the writable local run untouched.
 /// </summary>
 public sealed class VercelTrackerClient : ITrackerClient
 {
+    private const string DatabaseOverrideVariable = "SOULBUDDY_VERCEL_SOULLOCKE_DATABASE_URL";
+    private const string LegacyDefaultDatabaseUrl = "https://soullocke-f7500.firebaseio.com";
+
+    private readonly HttpClient _httpClient;
     private readonly VercelSoullockeClient _inner;
+    private readonly SemaphoreSlim _endpointLock = new(1, 1);
+    private bool _endpointResolved;
 
     public VercelTrackerClient(HttpClient httpClient, AppConfig config)
     {
-        // Keep the shared HttpClient untouched. VercelSoullockeClient already performs
-        // a fresh Firebase GET for every partner poll.
+        _httpClient = httpClient;
         _inner = new VercelSoullockeClient(httpClient, config);
     }
 
@@ -23,26 +28,68 @@ public sealed class VercelTrackerClient : ITrackerClient
     public string SessionGameName => _inner.SessionGameName;
     public bool IsSynchronizationHealthy => _inner.IsSynchronizationHealthy;
 
-    public Task<SoullockeRun> LoadRunAsync(CancellationToken cancellationToken) =>
-        _inner.LoadRunAsync(cancellationToken);
+    public async Task<SoullockeRun> LoadRunAsync(CancellationToken cancellationToken)
+    {
+        await EnsureDatabaseEndpointAsync(cancellationToken);
+        return await _inner.LoadRunAsync(cancellationToken);
+    }
 
     public async Task<SoullockeRun?> LoadPartnerRunAsync(CancellationToken cancellationToken)
     {
+        await EnsureDatabaseEndpointAsync(cancellationToken);
         var run = await _inner.LoadPartnerRunAsync(cancellationToken);
         if (run is not null)
             NormalizeRunLocations(run);
         return run;
     }
 
-    public Task SaveRunAsync(
+    public async Task SaveRunAsync(
         Dictionary<string, SoullockeEncounter> encounters,
-        CancellationToken cancellationToken) =>
-        _inner.SaveRunAsync(encounters, cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        await EnsureDatabaseEndpointAsync(cancellationToken);
+        await _inner.SaveRunAsync(encounters, cancellationToken);
+    }
 
-    public Task<bool> MarkLinkedPartnerBroFailedAsync(
+    public async Task<bool> MarkLinkedPartnerBroFailedAsync(
         string location,
-        CancellationToken cancellationToken) =>
-        _inner.MarkLinkedPartnerBroFailedAsync(location, cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        await EnsureDatabaseEndpointAsync(cancellationToken);
+        return await _inner.MarkLinkedPartnerBroFailedAsync(location, cancellationToken);
+    }
+
+    private async Task EnsureDatabaseEndpointAsync(CancellationToken cancellationToken)
+    {
+        if (_endpointResolved)
+            return;
+
+        await _endpointLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_endpointResolved)
+                return;
+
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(DatabaseOverrideVariable)))
+            {
+                var deployedUrl = await VercelDatabaseUrlResolver.TryResolveAsync(
+                    _httpClient,
+                    cancellationToken);
+
+                Environment.SetEnvironmentVariable(
+                    DatabaseOverrideVariable,
+                    string.IsNullOrWhiteSpace(deployedUrl)
+                        ? LegacyDefaultDatabaseUrl
+                        : deployedUrl.TrimEnd('/'));
+            }
+
+            _endpointResolved = true;
+        }
+        finally
+        {
+            _endpointLock.Release();
+        }
+    }
 
     private static void NormalizeRunLocations(SoullockeRun run)
     {
