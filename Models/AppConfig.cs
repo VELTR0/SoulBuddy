@@ -8,6 +8,7 @@ public sealed class AppConfig
     public string TeamName { get; set; } = string.Empty;
     public string PlayerName { get; set; } = string.Empty;
     public string AuthToken { get; set; } = string.Empty;
+    public TrackerProvider TrackerProvider { get; set; } = TrackerProvider.SoullockeDotCom;
 
     public int RunNumber { get; init; } = 1;
     public int PollIntervalMilliseconds { get; init; } = 1000;
