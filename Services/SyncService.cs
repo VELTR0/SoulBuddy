@@ -602,40 +602,6 @@ public sealed class SyncService
                         ownEncounter?.Nickname ?? linkedLocal?.Nickname);
                 }
             }
-            else if (currentStatus == "notcaught")
-            {
-                if (ownEncounter is not null && ownKey is not null)
-                {
-                    var ownStatus = NormalizeStatus(ownEncounter.Status);
-                    if (ownStatus is not "fainted" and not "notcaught" and not "brofailed")
-                    {
-                        ownEncounter.Status = "brofailed";
-                        changed = true;
-                    }
-
-                    await _knownPokemon.UpsertSoullockeEncounterAsync(
-                        linkedLocal?.UniqueId ?? $"soullocke:{_config.PlayerId}:{ownKey}",
-                        ownEncounter.Pokemon,
-                        ownEncounter.Nickname,
-                        ownKey,
-                        "brofailed",
-                        cancellationToken);
-                }
-
-                var isTransition = _partnerSnapshotInitialized && previousStatus != "notcaught";
-                if (publishTransitions && isTransition)
-                {
-                    _ruleEvents.PublishPartnerCatchFailed(
-                        _soullockeClient.PartnerPlayerName ?? "Partner",
-                        pair.Value.Pokemon,
-                        $"Pokémon #{pair.Value.Pokemon}",
-                        pair.Value.Nickname,
-                        ToDisplayLocation(pair.Key),
-                        ownEncounter?.Pokemon,
-                        linkedLocal?.Species,
-                        ownEncounter?.Nickname ?? linkedLocal?.Nickname);
-                }
-            }
             else if (currentStatus == "boxed")
             {
                 // Only a real alive -> boxed transition counts as the partner
