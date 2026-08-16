@@ -2,6 +2,12 @@ using SoulBuddy.Models;
 
 namespace SoulBuddy.Services;
 
+public enum TrackerProviderKind
+{
+    LegacySoullocke,
+    VercelSoullocke
+}
+
 /// <summary>
 /// Common contract for external Nuzlocke/SoulLink trackers.
 /// SoulBuddy owns the local player's state after the initial import, while partner
