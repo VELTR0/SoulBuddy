@@ -9,7 +9,7 @@ public sealed class SyncService
 {
     private readonly AppConfig _config;
     private readonly IPartySource _partySource;
-    private readonly SoullockeClient _soullockeClient;
+    private readonly ITrackerClient _soullockeClient;
     private readonly KnownPokemonStore _knownPokemon;
     private readonly LocationMapper _locationMapper;
     private readonly NuzlockeRuleEventSource _ruleEvents;
@@ -32,7 +32,7 @@ public sealed class SyncService
     public SyncService(
         IPartySource partySource,
         KnownPokemonStore knownPokemon,
-        SoullockeClient soullockeClient,
+        ITrackerClient soullockeClient,
         LocationMapper locationMapper,
         NuzlockeRuleEventSource ruleEvents,
         AppConfig config)
@@ -47,6 +47,8 @@ public sealed class SyncService
     }
 
     public string? PartnerPlayerName => _soullockeClient.PartnerPlayerName;
+
+    public bool IsSynchronizationHealthy => _soullockeClient.IsSynchronizationHealthy;
 
     public bool TryGetPartnerLink(string location, out SoulLinkPartnerInfo? link)
     {
@@ -593,6 +595,40 @@ public sealed class SyncService
                         _soullockeClient.PartnerPlayerName ?? "Partner",
                         pair.Value.Pokemon,
                         partnerSpeciesName,
+                        pair.Value.Nickname,
+                        ToDisplayLocation(pair.Key),
+                        ownEncounter?.Pokemon,
+                        linkedLocal?.Species,
+                        ownEncounter?.Nickname ?? linkedLocal?.Nickname);
+                }
+            }
+            else if (currentStatus == "notcaught")
+            {
+                if (ownEncounter is not null && ownKey is not null)
+                {
+                    var ownStatus = NormalizeStatus(ownEncounter.Status);
+                    if (ownStatus is not "fainted" and not "notcaught" and not "brofailed")
+                    {
+                        ownEncounter.Status = "brofailed";
+                        changed = true;
+                    }
+
+                    await _knownPokemon.UpsertSoullockeEncounterAsync(
+                        linkedLocal?.UniqueId ?? $"soullocke:{_config.PlayerId}:{ownKey}",
+                        ownEncounter.Pokemon,
+                        ownEncounter.Nickname,
+                        ownKey,
+                        "brofailed",
+                        cancellationToken);
+                }
+
+                var isTransition = _partnerSnapshotInitialized && previousStatus != "notcaught";
+                if (publishTransitions && isTransition)
+                {
+                    _ruleEvents.PublishPartnerCatchFailed(
+                        _soullockeClient.PartnerPlayerName ?? "Partner",
+                        pair.Value.Pokemon,
+                        $"Pokémon #{pair.Value.Pokemon}",
                         pair.Value.Nickname,
                         ToDisplayLocation(pair.Key),
                         ownEncounter?.Pokemon,
