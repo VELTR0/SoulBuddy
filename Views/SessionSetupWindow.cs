@@ -14,6 +14,7 @@ public sealed class SessionSetupWindow : Window
     private readonly SessionStore _sessionStore = new();
     private readonly TextBox _playerNameBox;
     private readonly TextBox _soullockeLinkBox;
+    private readonly TextBlock _soullockePasswordLabel;
     private readonly TextBox _soullockePasswordBox;
     private readonly CheckBox _showMainWindowCheckBox;
     private readonly TextBlock _statusText;
@@ -32,8 +33,10 @@ public sealed class SessionSetupWindow : Window
 
         _playerNameBox = CreateTextBox("Dein Spielername");
         _soullockeLinkBox = CreateTextBox("SoulLocke-Link");
+        _soullockePasswordLabel = CreateLabel("SoulLocke-Passwort");
         _soullockePasswordBox = CreateTextBox("SoulLocke-Passwort");
         _soullockePasswordBox.PasswordChar = '●';
+        _soullockeLinkBox.TextChanged += (_, _) => UpdateTrackerInputUi();
 
         _showMainWindowCheckBox = new CheckBox
         {
@@ -61,6 +64,7 @@ public sealed class SessionSetupWindow : Window
         _activePlayerCard.IsVisible = false;
 
         Content = BuildLayout();
+        UpdateTrackerInputUi();
         Opened += OnOpened;
     }
 
@@ -99,7 +103,7 @@ public sealed class SessionSetupWindow : Window
         form.Children.Add(_playerNameBox);
         form.Children.Add(CreateLabel("SoulLocke-Link"));
         form.Children.Add(_soullockeLinkBox);
-        form.Children.Add(CreateLabel("SoulLocke-Passwort"));
+        form.Children.Add(_soullockePasswordLabel);
         form.Children.Add(_soullockePasswordBox);
         form.Children.Add(Text(
             "SoulBuddy liest Partnerdaten ausschließlich aus SoulLocke und schreibt ausschließlich deinen eigenen Run zurück.",
@@ -146,6 +150,7 @@ public sealed class SessionSetupWindow : Window
             _soullockePasswordBox.Text = _activeContext.SoullockePassword;
             _showMainWindowCheckBox.IsChecked = _activeContext.ShowMainWindow;
             _activePlayerCard.IsVisible = true;
+            UpdateTrackerInputUi();
         }
         catch (Exception ex)
         {
@@ -204,9 +209,20 @@ public sealed class SessionSetupWindow : Window
 
     private static void ValidateSoullockeInput(string link, string password)
     {
-        _ = SoullockeLaunchSettings.ExtractSessionId(link);
-        if (string.IsNullOrWhiteSpace(password))
+        var tracker = TrackerLinkParser.Parse(link);
+        if (tracker.RequiresPassword && string.IsNullOrWhiteSpace(password))
             throw new ArgumentException("Bitte gib das SoulLocke-Passwort ein.");
+    }
+
+    private void UpdateTrackerInputUi()
+    {
+        var requiresPassword = true;
+        if (TrackerLinkParser.TryParse(_soullockeLinkBox.Text, out var tracker) && tracker is not null)
+            requiresPassword = tracker.RequiresPassword;
+
+        _soullockePasswordLabel.IsVisible = requiresPassword;
+        _soullockePasswordBox.IsVisible = requiresPassword;
+        _soullockePasswordBox.IsEnabled = requiresPassword;
     }
 
     private async Task ExecuteAsync(Func<Task> action)
