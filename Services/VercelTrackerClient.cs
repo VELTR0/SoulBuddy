@@ -5,8 +5,8 @@ namespace SoulBuddy.Services;
 /// <summary>
 /// Provider boundary for soullocke.vercel.app. The upstream tracker uses Firebase
 /// Realtime Database and PokeAPI-style English location names. This wrapper converts
-/// those location names to the canonical names SoulBuddy already uses for its Gen-4
-/// collector so partner links can be refreshed while SoulBuddy is running.
+/// partner location names to the canonical names SoulBuddy already uses for its Gen-4
+/// collector while leaving the writable local run untouched.
 /// </summary>
 public sealed class VercelTrackerClient : ITrackerClient
 {
@@ -14,10 +14,8 @@ public sealed class VercelTrackerClient : ITrackerClient
 
     public VercelTrackerClient(HttpClient httpClient, AppConfig config)
     {
-        // Do not mutate DefaultRequestHeaders on the shared HttpClient here. The
-        // underlying Firebase client already performs a fresh GET for every partner
-        // poll, and global cache directives can interfere with other requests that use
-        // the same client instance.
+        // Keep the shared HttpClient untouched. VercelSoullockeClient already performs
+        // a fresh Firebase GET for every partner poll.
         _inner = new VercelSoullockeClient(httpClient, config);
     }
 
@@ -25,12 +23,8 @@ public sealed class VercelTrackerClient : ITrackerClient
     public string SessionGameName => _inner.SessionGameName;
     public bool IsSynchronizationHealthy => _inner.IsSynchronizationHealthy;
 
-    public async Task<SoullockeRun> LoadRunAsync(CancellationToken cancellationToken)
-    {
-        var run = await _inner.LoadRunAsync(cancellationToken);
-        NormalizeRunLocations(run);
-        return run;
-    }
+    public Task<SoullockeRun> LoadRunAsync(CancellationToken cancellationToken) =>
+        _inner.LoadRunAsync(cancellationToken);
 
     public async Task<SoullockeRun?> LoadPartnerRunAsync(CancellationToken cancellationToken)
     {
