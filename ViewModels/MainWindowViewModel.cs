@@ -198,7 +198,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private void UpdateServerSyncStatus()
     {
-        ServerSyncStatus = SoullockeClient.IsServerSynchronizationHealthy
+        ServerSyncStatus = _runtime?.SyncService.IsServerSynchronizationHealthy == true
             ? "Server verbunden"
             : "Synchronisierung über Server nicht erfolgreich";
     }
