@@ -123,11 +123,11 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         nuzlockeRuleEventSource.EventOccurred += (_, ruleEvent) =>
             overlayMessageWriter.Write(ruleEvent);
 
-        var soullockeClient = new SoullockeClient(httpClient, config);
+        var trackerClient = TrackerClientFactory.Create(httpClient, config);
         var syncService = new SyncService(
             livePartySource,
             knownPokemonStore,
-            soullockeClient,
+            trackerClient,
             locationMapper,
             nuzlockeRuleEventSource,
             config);
