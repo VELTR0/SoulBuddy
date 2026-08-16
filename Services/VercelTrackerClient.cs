@@ -5,16 +5,15 @@ namespace SoulBuddy.Services;
 /// <summary>
 /// Stable provider boundary for soullocke.vercel.app.
 ///
-/// The deployed tracker belongs to the older Firebase project "soullocke-f7500".
-/// Its production Realtime Database uses the legacy project-id endpoint
-/// (soullocke-f7500.firebaseio.com), while VercelSoullockeClient also keeps the
-/// newer *-default-rtdb endpoint shapes as fallbacks. Prefer an explicit user
-/// override when one is configured.
+/// Runtime diagnostics from the deployed tracker confirmed that its active
+/// Realtime Database is soullocke-f7500-default-rtdb.firebaseio.com. Keep the
+/// older project-id endpoint and regional variants only as fallbacks. An explicit
+/// environment override always wins.
 /// </summary>
 public sealed class VercelTrackerClient : ITrackerClient
 {
     private const string DatabaseOverrideVariable = "SOULBUDDY_VERCEL_SOULLOCKE_DATABASE_URL";
-    private const string ProductionDatabaseUrl = "https://soullocke-f7500.firebaseio.com";
+    private const string ProductionDatabaseUrl = "https://soullocke-f7500-default-rtdb.firebaseio.com";
     private static readonly TimeSpan DiagnosticProbeTimeout = TimeSpan.FromSeconds(5);
 
     private readonly HttpClient _httpClient;
@@ -35,7 +34,7 @@ public sealed class VercelTrackerClient : ITrackerClient
             Environment.SetEnvironmentVariable(DatabaseOverrideVariable, configuredEndpoint);
             DiagnosticLog.Info(
                 "VercelTracker",
-                $"No database override configured. Using built-in endpoint '{configuredEndpoint}'.");
+                $"No database override configured. Using confirmed endpoint '{configuredEndpoint}'.");
         }
         else
         {
@@ -44,6 +43,10 @@ public sealed class VercelTrackerClient : ITrackerClient
                 $"Using database endpoint from {DatabaseOverrideVariable}: '{configuredEndpoint.TrimEnd('/')}'.");
         }
 
+        // Firebase REST can return numeric-keyed child collections as JSON arrays.
+        // Install tolerant converters before VercelSoullockeClient performs its
+        // first System.Text.Json operation.
+        FirebaseJsonCompatibility.ConfigureForVercelClient();
         _inner = new VercelSoullockeClient(httpClient, config);
     }
 
@@ -269,7 +272,8 @@ public sealed class VercelTrackerClient : ITrackerClient
         if (!string.IsNullOrWhiteSpace(configured))
             yield return configured.TrimEnd('/');
 
-        yield return "https://soullocke-f7500-default-rtdb.firebaseio.com";
+        yield return ProductionDatabaseUrl;
+        yield return "https://soullocke-f7500.firebaseio.com";
         yield return "https://soullocke-f7500-default-rtdb.europe-west1.firebasedatabase.app";
         yield return "https://soullocke-f7500-default-rtdb.asia-southeast1.firebasedatabase.app";
         yield return "https://soullocke-f7500-default-rtdb.firebasedatabase.app";
