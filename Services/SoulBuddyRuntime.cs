@@ -123,7 +123,13 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         nuzlockeRuleEventSource.EventOccurred += (_, ruleEvent) =>
             overlayMessageWriter.Write(ruleEvent);
 
-        var soullockeClient = new SoullockeClient(httpClient, config);
+        ITrackerClient soullockeClient = SoullockeLaunchSettings.Provider switch
+        {
+            TrackerProviderKind.VercelSoullocke =>
+                new VercelSoullockeTrackerClient(httpClient, config),
+            _ => new LegacySoullockeTrackerClient(httpClient, config)
+        };
+
         var syncService = new SyncService(
             livePartySource,
             knownPokemonStore,
@@ -137,9 +143,9 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
             playerLiveStateSource,
             nuzlockeRuleEventSource);
 
-        // Do not initialize SoulLocke here. The collector must be able to start even
-        // while the server is unavailable or still connecting. SyncService performs
-        // its own initialization in the background after Start().
+        // Do not initialize the tracker here. The collector must be able to start even
+        // while the remote service is unavailable or still connecting. SyncService
+        // performs its own initialization in the background after Start().
         return new SoulBuddyRuntime(
             config,
             configDirectory,
@@ -160,10 +166,10 @@ public sealed class SoulBuddyRuntime : IAsyncDisposable
         if (!config.SoullockeEnabled || string.IsNullOrWhiteSpace(config.SessionId))
             return Path.Combine(configDirectory, "soulbuddy.db");
 
-        // SoulLocke is the persistent source of truth. Each SoulBuddy runtime gets a
-        // unique temporary Pokémon database so no encounter/team state can leak from
-        // a previous launch and overlapping runtime shutdown/startup cannot lock the
-        // next session out of its database.
+        // The configured tracker is the persistent source of truth. Each SoulBuddy
+        // runtime gets a unique temporary Pokémon database so no encounter/team state
+        // can leak from a previous launch and overlapping shutdown/startup cannot lock
+        // the next session out of its database.
         var session = SanitizePathComponent(config.SessionId);
         var player = SanitizePathComponent(config.PlayerName);
         var run = Math.Max(1, config.RunNumber);

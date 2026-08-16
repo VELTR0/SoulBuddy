@@ -32,7 +32,7 @@ public sealed class SessionSetupWindow : Window
 
         _playerNameBox = CreateTextBox("Dein Spielername");
         _soullockeLinkBox = CreateTextBox("SoulLocke-Link");
-        _soullockePasswordBox = CreateTextBox("SoulLocke-Passwort");
+        _soullockePasswordBox = CreateTextBox("SoulLocke-Passwort (falls erforderlich)");
         _soullockePasswordBox.PasswordChar = '●';
 
         _showMainWindowCheckBox = new CheckBox
@@ -101,6 +101,11 @@ public sealed class SessionSetupWindow : Window
         form.Children.Add(_soullockeLinkBox);
         form.Children.Add(CreateLabel("SoulLocke-Passwort"));
         form.Children.Add(_soullockePasswordBox);
+        form.Children.Add(Text(
+            "Für soullocke.vercel.app ist kein Passwort nötig. SoulBuddy erkennt die unterstützte Website automatisch.",
+            11,
+            FontWeight.Normal,
+            "#7C8BA1"));
         form.Children.Add(Text(
             "SoulBuddy liest Partnerdaten ausschließlich aus SoulLocke und schreibt ausschließlich deinen eigenen Run zurück.",
             11,
@@ -205,7 +210,7 @@ public sealed class SessionSetupWindow : Window
     private static void ValidateSoullockeInput(string link, string password)
     {
         _ = SoullockeLaunchSettings.ExtractSessionId(link);
-        if (string.IsNullOrWhiteSpace(password))
+        if (SoullockeLaunchSettings.RequiresPassword(link) && string.IsNullOrWhiteSpace(password))
             throw new ArgumentException("Bitte gib das SoulLocke-Passwort ein.");
     }
 

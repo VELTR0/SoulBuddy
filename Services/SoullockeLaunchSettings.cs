@@ -9,6 +9,8 @@ public static class SoullockeLaunchSettings
     public static string Link { get; private set; } = string.Empty;
     public static string Password { get; private set; } = string.Empty;
     public static string PlayerName { get; private set; } = string.Empty;
+    public static TrackerProviderKind Provider { get; private set; } =
+        TrackerProviderKind.LegacySoullocke;
 
     public static void Configure(
         string link,
@@ -20,6 +22,7 @@ public static class SoullockeLaunchSettings
             Link = link.Trim();
             Password = password;
             PlayerName = playerName.Trim();
+            Provider = DetectProvider(Link);
         }
     }
 
@@ -28,6 +31,7 @@ public static class SoullockeLaunchSettings
         lock (Sync)
         {
             var sessionId = ExtractSessionId(Link);
+            Provider = DetectProvider(Link);
             return new AppConfig
             {
                 PartyJsonPath = config.PartyJsonPath,
@@ -45,6 +49,33 @@ public static class SoullockeLaunchSettings
             };
         }
     }
+
+    public static TrackerProviderKind DetectProvider(string link)
+    {
+        if (string.IsNullOrWhiteSpace(link))
+            throw new ArgumentException("Bitte gib den SoulLocke-Link ein.", nameof(link));
+
+        var value = link.Trim();
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            // Preserve the historical behavior for users who paste only a legacy
+            // soullocke.com session id instead of the full URL.
+            return TrackerProviderKind.LegacySoullocke;
+        }
+
+        var host = uri.Host.Trim().ToLowerInvariant();
+        if (host is "soullocke.vercel.app" or "www.soullocke.vercel.app")
+            return TrackerProviderKind.VercelSoullocke;
+        if (host is "soullocke.com" or "www.soullocke.com")
+            return TrackerProviderKind.LegacySoullocke;
+
+        throw new ArgumentException(
+            $"Der Tracker '{uri.Host}' wird von SoulBuddy noch nicht unterstützt.",
+            nameof(link));
+    }
+
+    public static bool RequiresPassword(string link) =>
+        DetectProvider(link) == TrackerProviderKind.LegacySoullocke;
 
     public static string ExtractSessionId(string link)
     {

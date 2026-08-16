@@ -9,7 +9,7 @@ public sealed class SyncService
 {
     private readonly AppConfig _config;
     private readonly IPartySource _partySource;
-    private readonly SoullockeClient _soullockeClient;
+    private readonly ITrackerClient _soullockeClient;
     private readonly KnownPokemonStore _knownPokemon;
     private readonly LocationMapper _locationMapper;
     private readonly NuzlockeRuleEventSource _ruleEvents;
@@ -32,7 +32,7 @@ public sealed class SyncService
     public SyncService(
         IPartySource partySource,
         KnownPokemonStore knownPokemon,
-        SoullockeClient soullockeClient,
+        ITrackerClient soullockeClient,
         LocationMapper locationMapper,
         NuzlockeRuleEventSource ruleEvents,
         AppConfig config)
@@ -47,6 +47,8 @@ public sealed class SyncService
     }
 
     public string? PartnerPlayerName => _soullockeClient.PartnerPlayerName;
+
+    public bool IsSynchronizationHealthy => _soullockeClient.IsSynchronizationHealthy;
 
     public bool TryGetPartnerLink(string location, out SoulLinkPartnerInfo? link)
     {

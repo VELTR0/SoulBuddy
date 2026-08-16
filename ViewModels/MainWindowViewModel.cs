@@ -198,7 +198,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private void UpdateServerSyncStatus()
     {
-        ServerSyncStatus = SoullockeClient.IsServerSynchronizationHealthy
+        ServerSyncStatus = _runtime?.SyncService.IsSynchronizationHealthy == true
             ? "Server verbunden"
             : "Synchronisierung über Server nicht erfolgreich";
     }
@@ -375,7 +375,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                         $"Fangort: {entry.Location}\n" +
                         $"Fanglevel: {entry.LevelMet}\n" +
                         "\n" +
-
                         $"Fangort-ID: {entry.LocationId}\n" +
                         $"PID: {entry.Pid}\n" +
                         $"Erstmals erkannt: {entry.FirstSeenAt.LocalDateTime:g}\n" +
