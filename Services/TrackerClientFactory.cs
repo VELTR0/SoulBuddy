@@ -7,7 +7,7 @@ public static class TrackerClientFactory
     public static ITrackerClient Create(HttpClient httpClient, AppConfig config) =>
         config.TrackerProvider switch
         {
-            TrackerProvider.SoullockeVercel => new VercelSoullockeClient(httpClient, config),
+            TrackerProvider.SoullockeVercel => new VercelTrackerClient(httpClient, config),
             _ => new SoullockeDotComTrackerClient(httpClient, config)
         };
 }
