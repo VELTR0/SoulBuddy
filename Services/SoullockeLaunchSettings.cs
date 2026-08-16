@@ -27,17 +27,18 @@ public static class SoullockeLaunchSettings
     {
         lock (Sync)
         {
-            var sessionId = ExtractSessionId(Link);
+            var tracker = TrackerLinkParser.Parse(Link);
             return new AppConfig
             {
                 PartyJsonPath = config.PartyJsonPath,
-                SessionId = sessionId,
+                SessionId = tracker.RunId,
                 PlayerId = config.PlayerId,
                 TeamName = string.IsNullOrWhiteSpace(config.TeamName)
                     ? PlayerName
                     : config.TeamName,
                 PlayerName = PlayerName,
-                AuthToken = Password,
+                AuthToken = tracker.RequiresPassword ? Password : string.Empty,
+                TrackerProvider = tracker.Provider,
                 RunNumber = config.RunNumber,
                 PollIntervalMilliseconds = config.PollIntervalMilliseconds,
                 DryRun = false,
@@ -46,42 +47,8 @@ public static class SoullockeLaunchSettings
         }
     }
 
-    public static string ExtractSessionId(string link)
-    {
-        if (string.IsNullOrWhiteSpace(link))
-            throw new ArgumentException("Bitte gib den SoulLocke-Link ein.", nameof(link));
-
-        var value = link.Trim();
-        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
-        {
-            var query = uri.Query.TrimStart('?')
-                .Split('&', StringSplitOptions.RemoveEmptyEntries)
-                .Select(part => part.Split('=', 2))
-                .FirstOrDefault(parts =>
-                    parts.Length == 2 &&
-                    (string.Equals(parts[0], "sessionId", StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(parts[0], "session", StringComparison.OrdinalIgnoreCase) ||
-                     string.Equals(parts[0], "id", StringComparison.OrdinalIgnoreCase)));
-
-            if (query is not null)
-            {
-                var decoded = Uri.UnescapeDataString(query[1]).Trim();
-                if (!string.IsNullOrWhiteSpace(decoded))
-                    return decoded;
-            }
-
-            var lastSegment = uri.Segments
-                .Select(segment => segment.Trim('/'))
-                .LastOrDefault(segment => !string.IsNullOrWhiteSpace(segment));
-            if (!string.IsNullOrWhiteSpace(lastSegment))
-                return Uri.UnescapeDataString(lastSegment);
-        }
-
-        if (!value.Contains(' ') && value.Length >= 3)
-            return value;
-
-        throw new ArgumentException(
-            "Der SoulLocke-Link enthält keine erkennbare Session-ID.",
-            nameof(link));
-    }
+    // Kept for existing callers and stored profiles. New code should use
+    // TrackerLinkParser when provider information is needed as well.
+    public static string ExtractSessionId(string link) =>
+        TrackerLinkParser.Parse(link).RunId;
 }
