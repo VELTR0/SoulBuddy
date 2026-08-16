@@ -32,7 +32,7 @@ public sealed class SessionSetupWindow : Window
         Background = Brush("#0B1220");
 
         _playerNameBox = CreateTextBox("Dein Spielername");
-        _soullockeLinkBox = CreateTextBox("SoulLocke-Link");
+        _soullockeLinkBox = CreateTextBox("Tracker Website Link");
         _soullockePasswordLabel = CreateLabel("SoulLocke-Passwort");
         _soullockePasswordBox = CreateTextBox("SoulLocke-Passwort");
         _soullockePasswordBox.PasswordChar = '●';
@@ -101,7 +101,7 @@ public sealed class SessionSetupWindow : Window
         var form = new StackPanel { Spacing = 12 };
         form.Children.Add(CreateLabel("Spielername"));
         form.Children.Add(_playerNameBox);
-        form.Children.Add(CreateLabel("SoulLocke-Link"));
+        form.Children.Add(CreateLabel("Tracker Website Link"));
         form.Children.Add(_soullockeLinkBox);
         form.Children.Add(_soullockePasswordLabel);
         form.Children.Add(_soullockePasswordBox);
@@ -216,7 +216,7 @@ public sealed class SessionSetupWindow : Window
 
     private void UpdateTrackerInputUi()
     {
-        var requiresPassword = true;
+        var requiresPassword = false;
         if (TrackerLinkParser.TryParse(_soullockeLinkBox.Text, out var tracker) && tracker is not null)
             requiresPassword = tracker.RequiresPassword;
 
