@@ -414,7 +414,7 @@ public sealed class VercelSoullockeTrackerClient : ITrackerClient
 
     private static string GetInternalStatus(VercelPokemon pokemon)
     {
-        var events = pokemon.Events?.Values ?? [];
+        var events = pokemon.Events.Values;
         if (events.Any(evt => evt.Type == 1))
             return "notcaught";
         if (events.Any(evt => evt.Type is 4 or 6))
@@ -423,7 +423,7 @@ public sealed class VercelSoullockeTrackerClient : ITrackerClient
         return (pokemon.Location ?? string.Empty).Trim().ToLowerInvariant() switch
         {
             "box" or "daycare" => "boxed",
-            "grave" => events.Any(evt => evt.Type == 3) ? "fainted" : "fainted",
+            "grave" => "fainted",
             _ => "alive"
         };
     }
@@ -558,6 +558,8 @@ public sealed class VercelSoullockeTrackerClient : ITrackerClient
         {
             pair.Value.Id = string.IsNullOrWhiteSpace(pair.Value.Id) ? pair.Key : pair.Value.Id;
             pair.Value.Pokemon ??= new Dictionary<string, VercelPokemon>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pokemon in pair.Value.Pokemon.Values)
+                pokemon.Events ??= new Dictionary<string, VercelPokemonEvent>(StringComparer.Ordinal);
         }
 
         IsSynchronizationHealthy = true;
