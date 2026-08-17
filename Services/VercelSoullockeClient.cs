@@ -145,11 +145,22 @@ public sealed class VercelSoullockeClient : ITrackerClient
             if (string.IsNullOrWhiteSpace(_config.SessionId))
                 throw new InvalidOperationException("Der Tracker-Link enthält keine gültige Run-ID.");
 
+            DiagnosticLog.Info("VercelFirebase", "Run document initialization started.");
             var document = await LoadDocumentAsync(cancellationToken);
+            DiagnosticLog.Info(
+                "VercelFirebase",
+                $"Run document parsed: players={document.Players.Count}; " +
+                $"timelineEntries={document.Timeline.Count}.");
             ResolvePlayers(document);
+            DiagnosticLog.Info(
+                "VercelFirebase",
+                $"Player assignment resolved: partnerPresent={!string.IsNullOrWhiteSpace(_partnerPlayerId)}.");
             _sessionGameName = NormalizeGameName(document.Game);
             _document = document;
             _initialized = true;
+            DiagnosticLog.Info(
+                "VercelFirebase",
+                $"Run document initialization completed: game='{_sessionGameName}'.");
         }
         finally
         {
@@ -163,12 +174,19 @@ public sealed class VercelSoullockeClient : ITrackerClient
             return await GetDocumentFromAsync(_databaseBaseUrl, cancellationToken);
 
         Exception? lastError = null;
-        foreach (var candidate in DatabaseCandidates())
+        Exception? transientError = null;
+        foreach (var candidate in DatabaseCandidates().Distinct(StringComparer.OrdinalIgnoreCase))
         {
             try
             {
+                DiagnosticLog.Info(
+                    "VercelFirebase",
+                    $"Trying run document endpoint host='{GetEndpointHost(candidate)}'.");
                 var document = await GetDocumentFromAsync(candidate, cancellationToken);
                 _databaseBaseUrl = candidate.TrimEnd('/');
+                DiagnosticLog.Info(
+                    "VercelFirebase",
+                    $"Selected run document endpoint host='{GetEndpointHost(candidate)}'.");
                 return document;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -177,7 +195,13 @@ public sealed class VercelSoullockeClient : ITrackerClient
             }
             catch (Exception ex)
             {
+                DiagnosticLog.Warning(
+                    "VercelFirebase",
+                    $"Run document endpoint host='{GetEndpointHost(candidate)}' failed: " +
+                    $"{ex.GetType().Name}: {ex.Message}");
                 lastError = ex;
+                if (IsTransientNetworkFailure(ex))
+                    transientError = ex;
             }
         }
 
@@ -186,7 +210,7 @@ public sealed class VercelSoullockeClient : ITrackerClient
             "Die Firebase-Datenbank von soullocke.vercel.app konnte nicht erreicht werden. " +
             "Falls der Tracker seine Datenbank-URL geändert hat, kann sie über die " +
             "Umgebungsvariable SOULBUDDY_VERCEL_SOULLOCKE_DATABASE_URL gesetzt werden.",
-            lastError);
+            transientError ?? lastError);
     }
 
     private async Task<VercelRunDocument> GetDocumentFromAsync(
@@ -201,16 +225,22 @@ public sealed class VercelSoullockeClient : ITrackerClient
             cancellationToken);
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        DiagnosticLog.Info(
+            "VercelFirebase",
+            $"GET run document host='{GetEndpointHost(baseUrl)}' => " +
+            $"HTTP {(int)response.StatusCode}; {SummarizeResponseBody(body)}.");
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
                 $"soullocke.vercel.app konnte nicht geladen werden: " +
-                $"{(int)response.StatusCode} {body}");
+                $"{(int)response.StatusCode} {SummarizeResponseBody(body)}",
+                inner: null,
+                statusCode: response.StatusCode);
         }
 
         if (string.Equals(body.Trim(), "null", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
-                $"Der soullocke.vercel.app-Run '{_config.SessionId}' wurde nicht gefunden.");
+                "Der soullocke.vercel.app-Run wurde am geprüften Endpunkt nicht gefunden.");
 
         var document = JsonSerializer.Deserialize<VercelRunDocument>(body, JsonOptions)
             ?? throw new InvalidOperationException(
@@ -543,12 +573,19 @@ public sealed class VercelSoullockeClient : ITrackerClient
             operation,
             cancellationToken);
 
+        DiagnosticLog.Info(
+            "VercelFirebase",
+            $"PUT operation='{operation}' host='{GetEndpointHost(baseUrl)}' => " +
+            $"HTTP {(int)response.StatusCode}.");
+
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             throw new HttpRequestException(
                 $"soullocke.vercel.app konnte nicht aktualisiert werden: " +
-                $"{(int)response.StatusCode} {body}");
+                $"{(int)response.StatusCode} {SummarizeResponseBody(body)}",
+                inner: null,
+                statusCode: response.StatusCode);
         }
     }
 
@@ -602,6 +639,34 @@ public sealed class VercelSoullockeClient : ITrackerClient
     }
 
     private static string Escape(string value) => Uri.EscapeDataString(value);
+
+    private static string GetEndpointHost(string baseUrl) =>
+        Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
+            ? uri.Host
+            : "<invalid-endpoint>";
+
+    private static string SummarizeResponseBody(string body)
+    {
+        var trimmed = body.Trim();
+        if (string.Equals(trimmed, "null", StringComparison.OrdinalIgnoreCase))
+            return "body=null";
+        if (trimmed.Contains("Permission denied", StringComparison.OrdinalIgnoreCase))
+            return "body reports Permission denied";
+        return $"bodyLength={body.Length}";
+    }
+
+    private static bool IsTransientNetworkFailure(Exception exception)
+    {
+        if (exception is TimeoutException)
+            return true;
+        if (exception is not HttpRequestException httpError)
+            return false;
+
+        return httpError.StatusCode is null or
+            System.Net.HttpStatusCode.RequestTimeout or
+            System.Net.HttpStatusCode.TooManyRequests ||
+            (int)httpError.StatusCode >= 500;
+    }
 
     private sealed class VercelRunDocument
     {

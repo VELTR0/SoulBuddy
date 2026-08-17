@@ -48,6 +48,8 @@ public sealed class SyncService
 
     public string? PartnerPlayerName => _soullockeClient.PartnerPlayerName;
     public bool IsServerSynchronizationHealthy => _soullockeClient.IsSynchronizationHealthy;
+    public TrackerSynchronizationState SynchronizationState { get; private set; } =
+        TrackerSynchronizationState.NotStarted;
 
     public bool TryGetPartnerLink(string location, out SoulLinkPartnerInfo? link)
     {
@@ -72,22 +74,53 @@ public sealed class SyncService
             if (_initialized)
                 return;
 
+            SynchronizationState = TrackerSynchronizationState.Initializing;
+            DiagnosticLog.Info(
+                "Sync",
+                $"Initialization started: provider={_config.TrackerProvider}; " +
+                $"enabled={_config.SoullockeEnabled}; " +
+                $"sessionFingerprint={DiagnosticLog.Fingerprint(_config.SessionId)}.");
+
             await _knownPokemon.LoadAsync(cancellationToken);
 
             if (_config.SoullockeEnabled)
             {
                 // The own run is read exactly once. From this point on this in-memory
                 // run is SoulBuddy's source of truth and is only written to Soullocke.
+                DiagnosticLog.Info("Sync", "Initial local run load started.");
                 _ownRun = await _soullockeClient.LoadRunAsync(cancellationToken);
+                DiagnosticLog.Info(
+                    "Sync",
+                    $"Initial local run load completed: encounters={_ownRun.Encounters.Count}.");
                 _ownRunDirty = CanonicalizeOwnRunLocations(_ownRun);
                 await PullInitialOwnEncountersAsync(_ownRun, cancellationToken);
 
                 // Partner data is always read-only and may be refreshed continuously.
+                DiagnosticLog.Info("Sync", "Initial partner run load started.");
                 var partnerRun = await _soullockeClient.LoadPartnerRunAsync(cancellationToken);
                 CapturePartnerSnapshot(partnerRun);
+                DiagnosticLog.Info(
+                    "Sync",
+                    $"Initial partner run load completed: present={partnerRun is not null}; " +
+                    $"encounters={partnerRun?.Encounters.Count ?? 0}.");
             }
 
             _initialized = true;
+            SynchronizationState = _config.SoullockeEnabled
+                ? TrackerSynchronizationState.Healthy
+                : TrackerSynchronizationState.NotStarted;
+            DiagnosticLog.Info("Sync", "Initialization completed successfully.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            DiagnosticLog.Warning("Sync", "Initialization cancelled by SoulBuddy shutdown.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            SynchronizationState = TrackerSynchronizationState.Failed;
+            DiagnosticLog.Exception("Sync", "Initialization failed", ex);
+            throw;
         }
         finally
         {
@@ -97,13 +130,40 @@ public sealed class SyncService
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        await InitializeAsync(cancellationToken);
+        while (!_initialized && !cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await InitializeAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex) when (IsTransientTrackerFailure(ex))
+            {
+                SynchronizationState = TrackerSynchronizationState.Initializing;
+                DiagnosticLog.Warning(
+                    "Sync",
+                    $"Transient initialization failure; retrying in " +
+                    $"{_config.PollIntervalMilliseconds}ms.");
+                await Task.Delay(_config.PollIntervalMilliseconds, cancellationToken);
+            }
+            catch
+            {
+                // InitializeAsync already recorded the precise deterministic failure.
+                // Invalid credentials, missing runs and schema errors must not loop.
+                return;
+            }
+        }
 
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
                 await SynchronizeOnceAsync(cancellationToken);
+                if (_config.SoullockeEnabled)
+                    SynchronizationState = TrackerSynchronizationState.Healthy;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -111,6 +171,8 @@ public sealed class SyncService
             }
             catch (Exception ex)
             {
+                SynchronizationState = TrackerSynchronizationState.Failed;
+                DiagnosticLog.Exception("Sync", "Synchronization cycle failed", ex);
                 Console.Error.WriteLine($"SoulLocke-Synchronisierung fehlgeschlagen: {ex.Message}");
             }
 
@@ -711,4 +773,23 @@ public sealed class SyncService
         string.IsNullOrWhiteSpace(nickname)
             ? species
             : $"{nickname} ({species})";
+
+    private static bool IsTransientTrackerFailure(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is TimeoutException)
+                return true;
+
+            if (current is HttpRequestException httpError)
+            {
+                return httpError.StatusCode is null or
+                    System.Net.HttpStatusCode.RequestTimeout or
+                    System.Net.HttpStatusCode.TooManyRequests ||
+                    (int)httpError.StatusCode >= 500;
+            }
+        }
+
+        return false;
+    }
 }

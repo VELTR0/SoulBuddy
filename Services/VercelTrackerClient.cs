@@ -56,15 +56,23 @@ public sealed class VercelTrackerClient : ITrackerClient
 
     public async Task<SoullockeRun> LoadRunAsync(CancellationToken cancellationToken)
     {
-        await EnsureDiagnosticsAsync(cancellationToken);
-        return await ExecuteLoggedAsync(
-            "LoadRunAsync",
-            () => _inner.LoadRunAsync(cancellationToken));
+        try
+        {
+            return await ExecuteLoggedAsync(
+                "LoadRunAsync",
+                () => _inner.LoadRunAsync(cancellationToken));
+        }
+        catch
+        {
+            // Candidate probes are useful after an actual failure, but must never
+            // delay or compete with the real initial synchronization request.
+            await EnsureDiagnosticsAsync(cancellationToken);
+            throw;
+        }
     }
 
     public async Task<SoullockeRun?> LoadPartnerRunAsync(CancellationToken cancellationToken)
     {
-        await EnsureDiagnosticsAsync(cancellationToken);
         return await ExecuteLoggedAsync(
             "LoadPartnerRunAsync",
             () => _inner.LoadPartnerRunAsync(cancellationToken));
@@ -74,7 +82,6 @@ public sealed class VercelTrackerClient : ITrackerClient
         Dictionary<string, SoullockeEncounter> encounters,
         CancellationToken cancellationToken)
     {
-        await EnsureDiagnosticsAsync(cancellationToken);
         DiagnosticLog.Info(
             "VercelTracker",
             $"SaveRunAsync starting with {encounters.Count} encounter(s). " +
@@ -106,7 +113,6 @@ public sealed class VercelTrackerClient : ITrackerClient
         string location,
         CancellationToken cancellationToken)
     {
-        await EnsureDiagnosticsAsync(cancellationToken);
         return await ExecuteLoggedAsync(
             "MarkLinkedPartnerBroFailedAsync",
             () => _inner.MarkLinkedPartnerBroFailedAsync(location, cancellationToken));
@@ -157,7 +163,8 @@ public sealed class VercelTrackerClient : ITrackerClient
 
             DiagnosticLog.Info(
                 "VercelDiagnostics",
-                $"Starting endpoint diagnostics for session='{_config.SessionId}', " +
+                $"Starting endpoint diagnostics for " +
+                $"sessionFingerprint={DiagnosticLog.Fingerprint(_config.SessionId)}, " +
                 $"player='{_config.PlayerName}'.");
 
             var candidates = DatabaseCandidates().Distinct(StringComparer.OrdinalIgnoreCase).ToArray();

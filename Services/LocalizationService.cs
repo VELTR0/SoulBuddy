@@ -53,6 +53,7 @@ public static class LocalizationService
         P("Noch nicht gestartet", "Not started yet", "Pas encore démarré", "Aún no iniciado", "Non ancora avviato", "未開始"),
         P("Spiel verbunden", "Game connected", "Jeu connecté", "Juego conectado", "Gioco connesso", "ゲーム接続済み"),
         P("Server verbunden", "Server connected", "Serveur connecté", "Servidor conectado", "Server connesso", "サーバー接続済み"),
+        P("Server-Synchronisierung wird gestartet …", "Starting server synchronization …", "Démarrage de la synchronisation serveur …", "Iniciando la sincronización con el servidor …", "Avvio della sincronizzazione con il server …", "サーバー同期を開始しています…"),
         P("Emulator wird gesucht …", "Looking for emulator …", "Recherche de l’émulateur …", "Buscando emulador …", "Ricerca emulatore …", "エミュレーターを検索中…"),
         P("Collector nicht verbunden", "Collector not connected", "Collecteur non connecté", "Collector no conectado", "Collector non connesso", "コレクター未接続"),
         P("Synchronisierung über Server nicht erfolgreich", "Server synchronization unsuccessful", "Échec de la synchronisation serveur", "La sincronización con el servidor no se ha realizado correctamente", "Sincronizzazione con il server non riuscita", "サーバー同期に失敗"),

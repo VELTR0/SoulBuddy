@@ -23,7 +23,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private string _liveEncounterTitle = "LIVE-STATUS";
     private string _liveEncounterText = "Warte auf Live-Daten aus dem Emulator …";
     private string _localPlayerStatus = "Emulator wird gesucht …";
-    private string _serverSyncStatus = "Synchronisierung über Server nicht erfolgreich";
+    private string _serverSyncStatus = "Server-Synchronisierung wird gestartet …";
     private string _localGameText = "Spiel: unbekannt";
     private string _localActivePokemonText = "Aktives Pokémon: wird ermittelt …";
     private string _partnerStatus = "Partnerdaten werden geladen …";
@@ -198,9 +198,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 
     private void UpdateServerSyncStatus()
     {
-        ServerSyncStatus = _runtime?.SyncService.IsServerSynchronizationHealthy == true
-            ? "Server verbunden"
-            : "Synchronisierung über Server nicht erfolgreich";
+        ServerSyncStatus = _runtime?.SyncService.SynchronizationState switch
+        {
+            TrackerSynchronizationState.Healthy => "Server verbunden",
+            TrackerSynchronizationState.Failed => "Synchronisierung über Server nicht erfolgreich",
+            _ => "Server-Synchronisierung wird gestartet …"
+        };
     }
 
     private void ApplyLiveState(PlayerLiveState state)

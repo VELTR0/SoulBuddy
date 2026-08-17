@@ -138,7 +138,9 @@ public sealed class SoullockeClient
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
-                $"Soullocke konnte nicht geladen werden: {(int)response.StatusCode} {body}");
+                $"Soullocke konnte nicht geladen werden: {(int)response.StatusCode} {body}",
+                inner: null,
+                statusCode: response.StatusCode);
         }
 
         var result = JsonSerializer.Deserialize<BatchLoadResponse>(body, JsonOptions)?.PlayerData
@@ -216,7 +218,9 @@ public sealed class SoullockeClient
         {
             throw new HttpRequestException(
                 $"Soullocke konnte für den lokalen Spieler nicht gespeichert werden: " +
-                $"{(int)response.StatusCode} {body}");
+                $"{(int)response.StatusCode} {body}",
+                inner: null,
+                statusCode: response.StatusCode);
         }
     }
 
@@ -426,7 +430,9 @@ public sealed class SoullockeClient
         {
             throw new HttpRequestException(
                 $"Die Soullocke-Sitzung konnte nicht geladen werden: " +
-                $"{(int)response.StatusCode} {body}");
+                $"{(int)response.StatusCode} {body}",
+                inner: null,
+                statusCode: response.StatusCode);
         }
 
         return JsonSerializer.Deserialize<SoullockeSessionResponse>(body, JsonOptions)
@@ -534,13 +540,16 @@ public sealed class SoullockeClient
         {
             throw new HttpRequestException(
                 $"Das Soullocke-Passwort konnte nicht geprüft werden: " +
-                $"{(int)response.StatusCode} {body}");
+                $"{(int)response.StatusCode} {body}",
+                inner: null,
+                statusCode: response.StatusCode);
         }
 
         var result = JsonSerializer.Deserialize<SoullockePasswordValidationResponse>(body, JsonOptions);
         if (result is null || !result.IsValid || string.IsNullOrWhiteSpace(result.AuthToken))
             throw new InvalidOperationException("Das eingegebene Soullocke-Passwort ist ungültig.");
 
+        DiagnosticLog.RegisterSensitiveValues(result.AuthToken);
         return result.AuthToken;
     }
 
