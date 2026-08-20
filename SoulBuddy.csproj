@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <OutputType>WinExe</OutputType>
+    <ApplicationIcon>Soulbuddy.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
